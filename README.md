@@ -102,8 +102,6 @@ flowchart TD
 | `VERIFICATION.template.md` | Mẫu để khai lệnh build/test của từng project |
 | `glossary.example.txt` | File mẫu cho `gloss-gate` |
 | `optional/orchestrator.md` | Bản thay thế system prompt. Không bật mặc định |
-| `bench/` | Bộ 10 task và script chấm điểm, để bạn tự đo trên việc của mình |
-| `docs/` | `AUDIT.md` (bản ghi đo) và `kit-selfcheck.py` |
 
 ### Năm subagent, mỗi cái một việc
 
@@ -206,17 +204,28 @@ nào chưa có thì nói là chưa có.
 | Chạy cái này | Ra cái này | Nó chứng minh gì |
 |---|---|---|
 | `claude plugin validate . --strict` | Validation passed, không warning | Manifest, hook config và frontmatter của cả 5 agent đều đúng schema |
-| `python3 docs/kit-selfcheck.py` | 145 checks, PASS 145, FAIL 0 | 145 ràng buộc về **giá trị** cấu hình đang đúng: model tier từng agent, ngưỡng số, tool nào bị cấm, và tính nhất quán chéo giữa các file |
-| `python3 docs/kit-selfcheck.py --selftest` | Bắt 30/30 defect | Đối chứng âm. Validator bị tiêm 30 lỗi thật rồi phải bắt đủ 30 — nó không phải loại luôn báo pass |
 
-Số thứ ba là số đáng tin nhất trong ba số, vì một validator luôn nói "ổn" thì vô
-dụng, mà chỉ có đối chứng âm mới phân biệt được hai loại đó.
+Đó là lệnh duy nhất bạn kiểm lại được từ bản phát hành này.
 
-`docs/AUDIT.md` là bản ghi đo của bộ kit nội bộ trước khi đóng gói, ở mức 141
-check và 28/28 defect. Con số hiện tại cao hơn vì mỗi lỗi tìm được trong quá trình
-đóng gói thành plugin đều được thêm một check để nó không tái diễn. File đó giữ
-nguyên số cũ vì đó là bản ghi đo — sửa số trong một bản ghi đo là đúng loại việc mà
-bộ kit này tồn tại để chặn.
+### Đo được, nhưng bạn phải tin tôi
+
+Hai số dưới đây đo bằng `kit-selfcheck.py`, script kiểm cấu hình nội bộ **không
+đóng gói kèm plugin**:
+
+| Số đo nội bộ | Kết quả | Nó chứng minh gì |
+|---|---|---|
+| 145 check ngữ nghĩa cấu hình | PASS 145, FAIL 0 | 145 ràng buộc về **giá trị** cấu hình đang đúng: model tier từng agent, ngưỡng số, tool nào bị cấm, và tính nhất quán chéo giữa các file |
+| Đối chứng âm: tiêm 30 defect | Bắt 30/30 | Validator bị tiêm 30 lỗi thật rồi phải bắt đủ 30 — nó không phải loại luôn báo pass |
+
+Số thứ hai đáng tin hơn số thứ nhất, vì một validator luôn nói "ổn" thì vô dụng,
+mà chỉ có đối chứng âm mới phân biệt được hai loại đó.
+
+Nhưng cả hai đều là số **tôi báo lại**, không phải số bạn kiểm lại được từ repo
+này. Hãy đọc chúng đúng ở mức đó. Bản ghi đo nội bộ trước khi đóng gói ở mức 141
+check và 28/28 defect; con số hiện tại cao hơn vì mỗi lỗi tìm được trong quá trình
+đóng gói thành plugin đều được thêm một check để nó không tái diễn. Bản ghi đó giữ
+nguyên số cũ — sửa số trong một bản ghi đo là đúng loại việc mà bộ kit này tồn tại
+để chặn.
 
 ### Gate có bắn thật không — sổ ghi từ chính lúc làm repo này
 
@@ -235,7 +244,7 @@ không bị nới ra cho dễ chịu.
 
 ### Chưa đo được — và tại sao chưa
 
-`docs/AUDIT.md` khai thẳng những chỉ số **chưa có số**: tỉ lệ bịa, tỉ lệ defect
+Bản ghi đo nội bộ khai thẳng những chỉ số **chưa có số**: tỉ lệ bịa, tỉ lệ defect
 lọt lưới, tỉ lệ có plan, tỉ lệ delegate, tổng chi phí, và tỉ lệ chặn oan trên task
 nhỏ. Lý do ghi trong đó: không có baseline thì con số đo sau vô nghĩa.
 
@@ -243,7 +252,7 @@ Vì vậy đừng đọc bộ kit này như một thứ đã được chứng mi
 nhiêu phần trăm. Cái đo được là **cấu hình đúng như thiết kế** và **cơ chế chặn có
 hoạt động**. Cái chưa đo được là **kết quả cuối trên việc thật**.
 
-`AUDIT.md` còn nói rõ một điều mà tài liệu quảng cáo thường bỏ qua: khi so hai
+Bản ghi đó còn nói rõ một điều mà tài liệu quảng cáo thường bỏ qua: khi so hai
 phiên bản mà chỉ có số đo tĩnh, kết luận duy nhất rút ra được là bản mới **đắt
 hơn**, chứ không phải tốt hơn.
 
@@ -255,31 +264,9 @@ hơn**, chứ không phải tốt hơn.
 | Nhãn phân loại | Khoảng 60–130 token mỗi lượt | Theo ghi chú trong `hooks/route-prompt.py` |
 | Bốn hook chặn | Không tốn token | Chúng chỉ đọc payload và trả exit code |
 
-Quy đổi ký tự sang token thì `AUDIT.md` dùng ước lượng 3,5 ký tự một token cho văn
-bản Việt–Anh trộn, và nói rõ đó là **ước lượng**, không phải đo bằng tokenizer
-thật. Ở đây cũng vậy: con số ký tự là đếm được, con số token là ước lượng.
-
-### Tự đo trên việc của bạn
-
-`bench/` có sẵn bộ 10 task, trong đó 6 task khớp với thứ kit định giải và 4 task là
-mồi nhử để lộ ra chỗ kit chặn oan.
-
-```bash
-python3 bench/score.py --label truoc-khi-cai --session <sessionId>
-python3 bench/score.py --label sau-khi-cai   --session <sessionId>
-python3 bench/score.py --compare truoc-khi-cai sau-khi-cai
-```
-
-Script đọc transcript phiên làm việc thật và tự tính được: tỉ lệ có plan, tỉ lệ
-delegate, tỉ lệ dùng từng agent, số lần ghi file trước khi có plan, số vòng hỏi
-lại, số lần gọi tool, số lượt. Chính script tự gọi mấy chỉ số này là **proxy, không
-phải chân lý** — ví dụ số lần dùng từng agent bị đếm trội vì đếm cả transcript của
-agent con, nên chỉ dùng để so tương đối giữa hai nhánh, đừng đọc như số tuyệt đối. Riêng tỉ lệ bịa và chất lượng tiêu chí hoàn thành
-thì **phải chấm bằng tay** theo rubric trong `bench/TASKS.md` — vì chưa có cách
-chấm tự động nào đáng tin cho hai thứ đó.
-
-Bảng kết quả trong `bench/TASKS.md` đang **để trống**. Đó là chỗ bạn điền, không
-phải chỗ tôi điền hộ.
+Quy đổi ký tự sang token dùng ước lượng 3,5 ký tự một token cho văn bản Việt–Anh
+trộn. Đó là **ước lượng**, không phải đo bằng tokenizer thật: con số ký tự là đếm
+được, con số token thì không.
 
 ## Những giới hạn đã biết
 
@@ -301,30 +288,28 @@ công, nơi `CLAUDE.md` tới được mọi agent. Bù lại, các luật cốt
 thẳng vào từng file trong `agents/`, nên subagent không đi làm mà tay trắng. Dù
 vậy đây vẫn là điều chưa đo, không phải điều đã bảo đảm.
 
-**`docs/kit-selfcheck.py` là kiểm tĩnh.** Nó đo cấu hình có đúng hay không, chứ
+**Mọi số đo của kit đều là kiểm tĩnh.** Chúng đo cấu hình có đúng hay không, chứ
 không đo được agent có thật sự ngừng bịa hay không.
 
 ## Tự kiểm
 
 ```bash
-claude plugin validate . --strict          # manifest và component của plugin
-python3 docs/kit-selfcheck.py              # 145 check ngữ nghĩa của bộ kit
-python3 docs/kit-selfcheck.py --selftest   # tiêm 30 defect, phải bắt đủ 30/30
+claude plugin validate . --strict   # manifest và component của plugin
 ```
 
-Lệnh thứ ba là đối chứng âm: nó cố tình làm hỏng cấu hình theo 30 cách khác nhau
-để chứng minh validator thật sự bắt được lỗi, chứ không phải luôn báo pass.
+Bộ kiểm ngữ nghĩa 145 check và đối chứng âm 30 defect là công cụ nội bộ, không
+phát hành kèm plugin. Kết quả của chúng ghi ở mục Hiệu quả bên trên.
 
 ## Đóng góp
 
 `main` là branch được bảo vệ, mọi thay đổi đi qua pull request. Trước khi mở PR,
-chạy hết ba lệnh ở mục Tự kiểm và dán output vào phần mô tả.
+chạy lệnh ở mục Tự kiểm và dán output vào phần mô tả.
 
 ## Tác giả
 
 Phát triển tại **Phòng ISCSU2**. Người phát triển: **TamBN3** — tambn3@fpt.com.
 
-Báo lỗi hoặc góp ý thì mở issue trên repo, kèm output của ba lệnh ở mục Tự kiểm.
+Báo lỗi hoặc góp ý thì mở issue trên repo, kèm output của lệnh ở mục Tự kiểm.
 
 ## Giấy phép
 
