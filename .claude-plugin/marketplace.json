@@ -1,0 +1,16 @@
+{
+  "name": "agent-kit",
+  "owner": {
+    "name": "Phòng ISCSU2",
+    "url": "https://github.com/nhattamgithub1999"
+  },
+  "description": "Marketplace một plugin: agent-kit.",
+  "plugins": [
+    {
+      "name": "agent-kit",
+      "displayName": "agent-kit",
+      "source": "./",
+      "version": "1.0.0"
+    }
+  ]
+}

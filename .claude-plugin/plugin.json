@@ -1,0 +1,22 @@
+{
+  "name": "agent-kit",
+  "displayName": "agent-kit",
+  "version": "1.0.0",
+  "description": "Subagent + verification loop cho Claude Code. Ba trụ: không bịa (grounding bằng tín hiệu tất định), có mục tiêu (DoD kiểm chứng được + stop condition), review lại (verification loop + critic gate).",
+  "author": {
+    "name": "TamBN3",
+    "email": "tambn3@fpt.com"
+  },
+  "keywords": [
+    "subagent",
+    "verification",
+    "no-fabrication",
+    "delegation",
+    "hooks"
+  ],
+  "repository": "https://github.com/nhattamgithub1999/agent-kit",
+  "license": "MIT",
+  "metadata": {
+    "team": "Phòng ISCSU2"
+  }
+}

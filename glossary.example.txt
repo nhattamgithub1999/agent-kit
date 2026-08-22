@@ -1,0 +1,13 @@
+# Glossary đã duyệt — copy sang ~/.claude/glossary.txt hoặc <repo>/.claude/glossary.txt
+#
+# Mỗi dòng: VIẾTTẮT = nghĩa chính thức
+# Token có ở đây được gloss-gate đối chiếu TRỰC TIẾP: mâu thuẫn -> chặn ngay,
+# không cần đoán qua chữ cái đầu. Đây là tín hiệu mạnh nhất trong hook.
+#
+# Chỉ thêm dòng khi anh ĐÃ XÁC NHẬN nghĩa. Một dòng sai ở đây sẽ hợp thức hoá
+# đúng loại bịa mà file này sinh ra để chặn.
+
+# NDVLDTT = <chưa xác nhận — điền sau khi tra OKF / hỏi nghiệp vụ>
+# PYC     = Phiếu yêu cầu
+# HĐ      = Hợp đồng
+# MST     = Mã số thuế
