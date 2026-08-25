@@ -15,7 +15,7 @@ PLUGIN_MANIFEST_PATH = ROOT / ".claude-plugin" / "plugin.json"
 MARKETPLACE_PATH = ROOT / ".claude-plugin" / "marketplace.json"
 VERIFICATION_PATH = ROOT / ".claude" / "verification.json"
 
-EXPECTED_PLUGIN_VERSION = "1.0.1"
+EXPECTED_PLUGIN_VERSION = "1.0.2"
 EXPECTED_AUTHOR_EMAIL = "tambn3@fpt.com"
 EXPECTED_CLAUDE_CODE_PIN = "2.1.241"
 MINIMUM_CLAUDE_CODE_VERSION = "2.1.196"

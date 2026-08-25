@@ -1,7 +1,7 @@
 {
   "name": "agent-kit",
   "displayName": "agent-kit",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Bộ điều phối subagent cho Claude Code với phê duyệt kế hoạch theo prompt, biên nhận kiểm chứng có cấu trúc và kiểm tra glossary khớp chính xác.",
   "author": {
     "name": "TamBN3",

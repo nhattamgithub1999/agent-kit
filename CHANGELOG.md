@@ -9,6 +9,57 @@ mà theo Semantic Versioning lẽ ra thuộc một major mới — số hiệu `
 KHÔNG phản ánh mức thay đổi, hãy đọc mục **Breaking** và **Migration** trước
 khi nâng cấp.
 
+## [1.0.2] - 2026-08-25
+
+Bản vá. Không có thay đổi phá tương thích. Tất cả sửa đổi dưới đây đến từ một
+đợt kiểm thử bản `1.0.1` đã cài, trong đó bộ test 171 case đều xanh nhưng vẫn bỏ
+lọt ba lỗi thật — vì harness test tự bơm sẵn trường mà runtime thật không gửi.
+
+### Fixed
+
+- `no-fake-pass` không còn chặn mọi mutation ở session chính. Theo thiết kế
+  payload hook được tài liệu hoá của Claude Code, `agent_id` chỉ có mặt bên
+  trong subagent và cố ý vắng mặt ở session chính; mốc `2.1.196` gắn với
+  `prompt_id` chứ không gắn với `agent_id`. Hook đang nhầm hai trường đó, khiến
+  receipt không bao giờ cấp được và luồng báo sẵn sàng của builder không thể
+  hoàn tất. Actor không phải builder nay nhận một sentinel danh tính ổn định;
+  watched builder vẫn fail-closed như cũ.
+- `gloss-gate` không còn chặn oan định danh viết hoa nối bằng gạch dưới. Lớp ký
+  tự chặn ở lookbehind và lookahead thiếu ký tự gạch dưới, nên đoạn sau gạch
+  dưới bị tách thành token độc lập rồi bị coi là định nghĩa bịa.
+- `no-fake-pass` không còn coi lệnh có cờ ghi hoặc thực thi lệnh con là chỉ đọc.
+  Khớp tiền tố chỉ đọc nay mất hiệu lực khi lệnh chứa cờ nguy hiểm của chính
+  tiền tố đó, kể cả khi không có ký tự chuyển hướng hay nối lệnh nào.
+- Bảng biến môi trường trong `README.md` khớp lại với code cho busy timeout, và
+  bổ sung biến trần lặp của `gloss-gate` vốn chưa từng được ghi.
+
+### Changed
+
+- `plan-gate` cho lệnh shell chứng minh được là chỉ đọc đi qua khi chưa có plan
+  duyệt, dùng chung đúng danh sách đã siết ở trên. Chỉ áp cho `Bash`, không áp
+  cho `PowerShell`. Fail-closed khi trường lệnh thiếu hoặc không phải chuỗi.
+
+### Added
+
+- 17 test hồi quy, gồm test khoá lại các hành vi chặn có chủ đích để lần sau
+  không bị nới nhầm, và một test đồng bộ tài liệu đọc bằng cây cú pháp để tài
+  liệu lệch code là bị bắt ngay.
+- `tests/support.py` cho phép bỏ hẳn một trường khỏi payload test, thay vì chỉ
+  đặt được giá trị rỗng — điều kiện cần để diễn tả "event thật không có trường
+  này".
+
+### Known issues
+
+Hai vấn đề đã xác định nhưng CHƯA vá trong bản này:
+
+- Plan approval bị thu hồi giữa chừng khi một sự kiện hệ thống tạo mã prompt
+  mới. Đã đo: sự kiện hệ thống CÓ kích hoạt hook nộp prompt y như prompt người
+  dùng, nên không phân biệt được bằng cách đếm sự kiện. Cần thiết kế lại theo
+  hướng nhận dạng nội dung.
+- Tài liệu của chính kit bị chính `gloss-gate` chặn ở 7 trên 7 file, do chúng
+  dùng cú pháp meta của kit làm ví dụ. Đây là bốn dạng định nghĩa chặt hoạt
+  động đúng thiết kế; khắc phục đòi hỏi quyết định chính sách, không phải sửa lỗi.
+
 ## [1.0.1] - 2026-08-25
 
 ### Breaking
