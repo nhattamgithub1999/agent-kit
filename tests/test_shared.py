@@ -651,6 +651,34 @@ class StateSecurityAndConcurrencyTests(TemporaryStateTestCase):
         locker.execute("ROLLBACK")
         self.assertLess(elapsed, 1.5)
 
+    def test_write_lock_wait_is_bounded_by_the_stores_own_deadline(self) -> None:
+        """The store must stop waiting on time, which busy_timeout cannot promise.
+
+        Measured on GitHub-hosted runners with the write lock held throughout,
+        a 2500ms busy_timeout waited 2.50s on Linux, 2.64s on Windows and
+        3.72-3.96s on macOS. A ceiling that overshoots by half cannot keep a
+        hook inside its outer timeout, so the wait is deadline-driven here and
+        the overshoot is one sleep, not one half of the budget.
+        """
+
+        budget = 2.0
+        store = shared.StateStore(self.state_root, busy_timeout_ms=int(budget * 1000))
+        locker = sqlite3.connect(str(store.db_path), isolation_level=None)
+        self.addCleanup(locker.close)
+        locker.execute("BEGIN IMMEDIATE")
+        started = time.monotonic()
+        with self.assertRaises(shared.StateUnavailable):
+            store.bump_mutation_epoch(
+                self.project, "deadline-session", "deadline-prompt",
+                "actor", "tool", {"tool": "Edit"},
+            )
+        elapsed = time.monotonic() - started
+        locker.execute("ROLLBACK")
+        # It really waited: giving up early would be a false block.
+        self.assertGreaterEqual(elapsed, budget * 0.9, elapsed)
+        # And it really stopped: the pre-deadline behaviour reached ~1.5x here.
+        self.assertLess(elapsed, budget + 0.6, elapsed)
+
     def test_threaded_cross_actor_mutations_are_atomic(self) -> None:
         errors = []
 

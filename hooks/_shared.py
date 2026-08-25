@@ -75,9 +75,28 @@ SCHEMA_VERSION = 2
 # test_lock_contention_fails_closed_within_outer_budget requires a blocked hook
 # to give up in under 4s. 2.5s satisfies both while sitting about 8x above the
 # contention threshold measured for 32 concurrent writers.
-DEFAULT_BUSY_TIMEOUT_MS = 2_000
+# 32 concurrent hooks were measured taking 1.4-2.2s of wall clock to drain the
+# write lock queue on GitHub-hosted runners, so a 2.5s ceiling left barely 15%
+# margin and one hook in the batch intermittently gave up. The ceiling below is
+# a real wall-clock bound now that the wait is deadline-driven, whereas 2500ms
+# of busy_timeout already cost up to 3.96s on macOS; the worst case therefore
+# grows by ~40ms, not by 1.5s, and the outer hook timeout keeps its margin.
+DEFAULT_BUSY_TIMEOUT_MS = 3_000
 MINIMUM_BUSY_TIMEOUT_MS = 50
-MAXIMUM_BUSY_TIMEOUT_MS = 2_500
+MAXIMUM_BUSY_TIMEOUT_MS = 4_000
+# SQLite's busy_timeout is a soft bound. It stops *starting* new retries once
+# the budget is spent, but every retry still sleeps for as long as the OS takes
+# to wake the thread, and the last sleep is never cut short. Measured on
+# GitHub-hosted runners with the write lock held throughout, a 2500ms budget
+# produced 2.50s on Linux, 2.64s on Windows and 3.72-3.96s on macOS; a 250ms
+# budget produced 0.25s, 0.33s and 0.59-0.65s. A ceiling that can overshoot by
+# half is not a ceiling: it is what pushed plan-gate past its outer hook
+# timeout. So SQLite gets only a token budget for the statements that rarely
+# block, and every statement that really can block is retried here under a
+# deadline checked against a monotonic clock.
+_INCIDENTAL_BUSY_TIMEOUT_MS = 25
+_LOCK_RETRY_INITIAL_SECONDS = 0.001
+_LOCK_RETRY_MAXIMUM_SECONDS = 0.05
 SUCCESS_OUTCOME = "runtime_success"
 ALLOWED_OUTCOMES = frozenset(
     {SUCCESS_OUTCOME, "runtime_failure", "interrupted", "background"}
@@ -637,6 +656,41 @@ class StateStore:
         remaining_seconds = deadline - time.monotonic()
         return max(1, int(remaining_seconds * 1000))
 
+    @staticmethod
+    def _is_lock_contention(exc: Exception) -> bool:
+        """Tell SQLITE_BUSY/SQLITE_LOCKED apart from a real statement error."""
+
+        code = getattr(exc, "sqlite_errorcode", None)  # Python 3.11+
+        if isinstance(code, int):
+            # 5 == SQLITE_BUSY, 6 == SQLITE_LOCKED; the high bits carry the
+            # extended result code, which names the sub-case, not the class.
+            return (code & 0xFF) in (5, 6)
+        text = str(exc).casefold()
+        return "locked" in text or "busy" in text
+
+    @classmethod
+    def _execute_until(cls, connection: Any, sql: str, deadline: float) -> None:
+        """Run a lock-taking statement, retrying until ``deadline`` passes.
+
+        Both statements this runs are safe to repeat: re-issuing
+        "PRAGMA journal_mode = WAL" is idempotent, and a BEGIN IMMEDIATE that
+        raised never opened a transaction. Anything that is not lock
+        contention propagates on the first attempt.
+        """
+
+        assert _sqlite3 is not None
+        delay = _LOCK_RETRY_INITIAL_SECONDS
+        while True:
+            try:
+                connection.execute(sql)
+                return
+            except _sqlite3.OperationalError as exc:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not cls._is_lock_contention(exc):
+                    raise
+                time.sleep(min(delay, remaining))
+                delay = min(delay * 2, _LOCK_RETRY_MAXIMUM_SECONDS)
+
     def _connect(self, deadline: Optional[float] = None):
         assert _sqlite3 is not None
         _secure_regular_file(self.db_path)
@@ -644,27 +698,25 @@ class StateStore:
             deadline = time.monotonic() + self.busy_timeout_ms / 1000.0
         connection = None
         try:
-            remaining_ms = self._remaining_busy_timeout_ms(deadline)
+            budget_ms = min(
+                _INCIDENTAL_BUSY_TIMEOUT_MS,
+                self._remaining_busy_timeout_ms(deadline),
+            )
             connection = _sqlite3.connect(
                 str(self.db_path),
-                timeout=remaining_ms / 1000.0,
+                timeout=budget_ms / 1000.0,
                 isolation_level=None,
             )
             connection.row_factory = _sqlite3.Row
-            connection.execute("PRAGMA busy_timeout = {}".format(remaining_ms))
+            connection.execute("PRAGMA busy_timeout = {}".format(budget_ms))
             connection.execute("PRAGMA foreign_keys = ON")
-            # "PRAGMA journal_mode = WAL" can itself block on a held write
-            # lock. Re-arm busy_timeout against the same deadline right
-            # before issuing it so this statement and the caller's later
-            # BEGIN IMMEDIATE share one ceiling instead of each getting a
-            # fresh busy_timeout allowance (that doubling is what let total
-            # wait exceed the outer hook timeout under lock contention).
-            connection.execute(
-                "PRAGMA busy_timeout = {}".format(
-                    self._remaining_busy_timeout_ms(deadline)
-                )
-            )
-            connection.execute("PRAGMA journal_mode = WAL")
+            # "PRAGMA journal_mode = WAL" blocks whenever it has to change the
+            # mode, which two hooks creating the database at once will hit. It
+            # shares the caller's deadline with the later BEGIN IMMEDIATE
+            # instead of getting a fresh allowance of its own: each statement
+            # having its own ceiling is what let the total wait exceed the
+            # outer hook timeout under lock contention.
+            self._execute_until(connection, "PRAGMA journal_mode = WAL", deadline)
             _secure_regular_file(self.db_path)
             for suffix in ("-wal", "-shm"):
                 _secure_regular_file(pathlib.Path(str(self.db_path) + suffix))
@@ -687,12 +739,7 @@ class StateStore:
         deadline = time.monotonic() + self.busy_timeout_ms / 1000.0
         connection = self._connect(deadline)
         try:
-            connection.execute(
-                "PRAGMA busy_timeout = {}".format(
-                    self._remaining_busy_timeout_ms(deadline)
-                )
-            )
-            connection.execute("BEGIN IMMEDIATE")
+            self._execute_until(connection, "BEGIN IMMEDIATE", deadline)
             yield connection
             connection.execute("COMMIT")
         except StateError:
@@ -1659,10 +1706,13 @@ def _rotate(path: pathlib.Path) -> None:
 _APPEND_LOCK_OFFSET = 1 << 40
 
 
-# Logging is best-effort and runs inside a hook that has its own outer timeout,
-# so waiting for the lock is bounded. A writer holds it for one write() of a
-# capped record, so this ceiling is orders of magnitude above real contention.
-_APPEND_LOCK_TIMEOUT_SECONDS = 1.0
+# Waiting for the lock is bounded because a hook's outer timeout has to cover
+# it. The blocking path spends up to MAXIMUM_BUSY_TIMEOUT_MS waiting for the
+# state lock and only then logs, so this ceiling stacks on top of that one:
+# 4s + 0.25s leaves the rest of the 6s outer timeout for interpreter start-up.
+# A writer holds the lock for a single write() of a capped record, so a quarter
+# of a second is still several thousand times the real hold time.
+_APPEND_LOCK_TIMEOUT_SECONDS = 0.25
 
 
 def _try_lock_append_region(descriptor: int) -> bool:

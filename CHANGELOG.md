@@ -67,15 +67,37 @@ khi nâng cấp.
 - Ngân sách chờ write lock của SQLite tính cho TRỌN một transaction/reader thay
   vì cho từng câu lệnh. `PRAGMA journal_mode = WAL` và `BEGIN IMMEDIATE` trước
   đây mỗi câu được cấp trọn `busy_timeout` riêng, nên tổng thời gian chờ có thể
-  chạm 2x trần và vượt outer timeout 5s của `plan-gate`.
+  chạm 2x trần và vượt outer timeout của `plan-gate`.
 - `plan-gate` nêu nguyên nhân gốc của `StateError` trong thông điệp chặn và log
   `plan_gate.state_unavailable`, thay vì chỉ một câu chung chung không chẩn
   đoán được từ log CI.
-- Nâng trần chờ write lock của SQLite từ 250ms lên 2000ms (trần tối đa 2500ms).
+- Nâng trần chờ write lock của SQLite từ 250ms lên 3000ms (trần tối đa 4000ms).
   Mức cũ quá hẹp: khi nhiều hook cùng giành lock trên runner chậm, một tiến
-  trình nhận `database is locked` và gate chặn oan một agent hợp lệ. Trần mới
-  vẫn nằm dưới ngân sách outer timeout 5s của `plan-gate` và dưới mốc 4s mà
-  test lock contention yêu cầu để fail-closed.
+  trình nhận `database is locked` và gate chặn oan một agent hợp lệ. Đo trên
+  runner GitHub, 32 hook đồng thời cần 1.4–2.2s để rút hết hàng đợi write lock,
+  nên trần 2500ms chỉ còn ~15% biên và vẫn thỉnh thoảng chặn oan một hook trong
+  lô. Vì thời gian chờ nay do deadline quyết định (xem mục dưới), 4000ms là
+  trần wall-clock thật, trong khi 2500ms `busy_timeout` từng tốn tới 3.96s trên
+  macOS — worst case tăng khoảng 40ms, không phải 1.5s.
+- Thời gian chờ write lock do `StateStore` tự cưỡng chế bằng đồng hồ monotonic,
+  không giao phó cho `PRAGMA busy_timeout`. `busy_timeout` chỉ là trần mềm: nó
+  ngừng KHỞI ĐỘNG lượt thử mới khi hết ngân sách, còn lượt đang ngủ vẫn ngủ hết.
+  Đo trên runner GitHub khi lock bị giữ suốt, ngân sách 2500ms tốn 2.50s trên
+  Linux, 2.64s trên Windows và 3.72–3.96s trên macOS; ngân sách 250ms tốn lần
+  lượt 0.25s, 0.33s và 0.59–0.65s. Vượt trần tới một nửa thì không còn là trần,
+  và chính nó đẩy `plan-gate` quá outer timeout.
+- `PRAGMA journal_mode = WAL` được thử lại theo cùng deadline. Câu lệnh này trả
+  `SQLITE_BUSY` mà không qua busy handler, nên khi nhiều hook cùng tạo database
+  một tiến trình chặn oan ngay lập tức với `cannot open SQLite state` — quan sát
+  được trên runner macOS ở lô 32 hook chỉ mất 0.785s, tức chưa hề chạm ngân sách.
+- Outer timeout của hook stateful (`plan-gate`, `no-fake-pass`) nâng từ 5s lên
+  6s để giữ đúng bất biến "outer ≥ trần busy + 2s" sau khi trần busy lên 4000ms.
+- Ghi log JSONL nguyên tử giữa các tiến trình. POSIX `O_APPEND` để kernel chốt
+  offset cuối ngay trong `write()`, nhưng CRT của Windows chỉ mô phỏng bằng
+  `lseek(END)` rồi `write`, nên hai hook có thể chốt cùng offset và một bản ghi
+  bị đè: CI Windows đếm 31 dòng thay vì 32. Nay cả hai nền tảng giữ khoá vùng
+  byte độc quyền quanh lần ghi, đặt ngoài vùng dữ liệu; thêm `O_BINARY` để CRT
+  không viết `\n` thành `\r\n` và làm lệch trần byte so với byte thật.
 - Đóng đường mutation qua `Bash`, `PowerShell`, `Monitor`, worktree và
   `mcp__.*` trước khi plan được duyệt.
 - Không còn mở plan gate sớm từ `PreToolUse`, `EnterPlanMode`, `TodoWrite` hoặc

@@ -50,13 +50,13 @@ EXPECTED = {
         (None, (("session-policy.py", 5),)),
     ],
     "UserPromptSubmit": [
-        (None, (("route-prompt.py", 5), ("plan-gate.py", 5))),
+        (None, (("route-prompt.py", 5), ("plan-gate.py", 6))),
     ],
     "PreToolUse": [
-        (PRE_MUTATION_MATCHER, (("plan-gate.py", 5),)),
+        (PRE_MUTATION_MATCHER, (("plan-gate.py", 6),)),
     ],
     "PostToolUse": [
-        ("ExitPlanMode", (("plan-gate.py", 5),)),
+        ("ExitPlanMode", (("plan-gate.py", 6),)),
         (POST_MUTATION_MATCHER, (("no-fake-pass.py", 10),)),
     ],
     "PostToolUseFailure": [
@@ -70,7 +70,7 @@ EXPECTED = {
         (None, (("no-fake-pass.py", 10), ("gloss-gate.py", 10))),
     ],
     "SessionEnd": [
-        (None, (("plan-gate.py", 5),)),
+        (None, (("plan-gate.py", 6),)),
     ],
 }
 
@@ -131,7 +131,7 @@ class HooksConfigTests(unittest.TestCase):
                         self.assertTrue((REPO_ROOT / relative_path).is_file(), arg)
 
     def test_stateful_hooks_have_busy_timeout_margin(self) -> None:
-        self.assertEqual(MAXIMUM_BUSY_TIMEOUT_MS, 2500)
+        self.assertEqual(MAXIMUM_BUSY_TIMEOUT_MS, 4000)
         for event, groups in self.events.items():
             for group in groups:
                 for hook in group["hooks"]:

@@ -45,7 +45,7 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/hooks/plan-gate.py"
             ],
-            "timeout": 5
+            "timeout": 6
           }
         ]
       }
@@ -60,7 +60,7 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/hooks/plan-gate.py"
             ],
-            "timeout": 5
+            "timeout": 6
           }
         ]
       }
@@ -75,7 +75,7 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/hooks/plan-gate.py"
             ],
-            "timeout": 5
+            "timeout": 6
           }
         ]
       },
@@ -166,7 +166,7 @@
             "args": [
               "${CLAUDE_PLUGIN_ROOT}/hooks/plan-gate.py"
             ],
-            "timeout": 5
+            "timeout": 6
           }
         ]
       }
