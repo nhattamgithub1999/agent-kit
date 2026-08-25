@@ -264,13 +264,19 @@ fail-closed.
 | `POLICY_FILE` | policy của plugin | Trỏ tới file policy UTF-8 khác |
 | `DUMP` | tắt | Giá trị không rỗng bật diagnostic dump đã redact |
 | `CLAUDE_PLUGIN_DATA` | fallback home | Root state do Claude Code cấp |
-| `AGENT_KIT_SQLITE_BUSY_TIMEOUT_MS` | `250` | SQLite busy timeout, clamp 50–1000 ms |
+| `AGENT_KIT_SQLITE_BUSY_TIMEOUT_MS` | `3000` | SQLite busy timeout, clamp 50–4000 ms |
 | `AGENT_KIT_LOG_MAX_BYTES` | `262144` | Giới hạn log, clamp 4096–4194304 byte |
 | `AGENT_KIT_DUMP_MAX_BYTES` | `262144` | Giới hạn dump, clamp 4096–4194304 byte |
+| `GLOSS_REPEAT_CAP` | `3` | Số lần chặn lặp lại tối đa trước khi gloss-gate cho qua, clamp 1–20 |
 
 `CLAUDE_PLUGIN_ROOT` và `CLAUDE_PROJECT_DIR` là context path mà Claude Code/hook
 dùng để tìm plugin hoặc project; chúng không phải feature toggle. Giá trị số sai
 format được đưa về mặc định và clamp thay vì làm hook crash.
+
+`AGENT_KIT_SQLITE_BUSY_TIMEOUT_MS` không phải trần thời gian chờ thực tế: SQLite
+chỉ dùng nó cho một khoản ngân sách nhỏ, còn phần chờ chính khi lock bị giữ được
+cưỡng chế bằng deadline đo theo đồng hồ đơn điệu trong Python, theo
+`hooks/_shared.py:87-99`.
 
 ## Tự kiểm repository
 
