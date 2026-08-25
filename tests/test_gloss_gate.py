@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import pathlib
@@ -12,10 +13,39 @@ import unittest
 from typing import Mapping, Optional
 
 from hooks._shared import hash_value
-from tests.support import HookCall, HookHarness, HookResult
+from tests.support import HookCall, HookHarness, HookResult, REPO_ROOT
 
 
 HOOK = "gloss-gate.py"
+
+
+def _load_gloss_gate_module():
+    """Import the hook's real extractor in-process for a precise corpus check.
+
+    Every other test in this file exercises the hook through the documented
+    subprocess boundary (see ``tests/support.py``). This one helper is used
+    only so the corpus test below can call ``_extract_definitions`` directly
+    and inspect *which character precedes a matched token*, which stderr
+    prose cannot answer precisely. The module file uses a hyphenated name, so
+    it is loaded by path rather than by a normal ``import`` statement.
+    """
+
+    hooks_dir = REPO_ROOT / "hooks"
+    hooks_dir_str = str(hooks_dir)
+    inserted = hooks_dir_str not in sys.path
+    if inserted:
+        sys.path.insert(0, hooks_dir_str)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "gloss_gate_module_under_test", hooks_dir / "gloss-gate.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        if inserted:
+            sys.path.remove(hooks_dir_str)
 
 
 class GlossGateTests(unittest.TestCase):
@@ -435,6 +465,111 @@ class GlossGateTests(unittest.TestCase):
         self.assertNotIn("Apple Boat Cat", log_text)
         if os.name == "posix":
             self.assertEqual(stat.S_IMODE(log_path.stat().st_mode), 0o600)
+
+    def test_underscore_joined_identifier_does_not_split_into_a_bare_tail_token(
+        self,
+    ) -> None:
+        """A `_`-joined identifier must not be torn into a standalone token.
+
+        Before the token-boundary fix, the segment after the last underscore
+        of an all-caps identifier was recognized as its own token, so an
+        assignment of the *whole* identifier (for example a Python constant
+        declaration) was misread as an explicit definition of just the tail.
+        """
+        self.assert_passes(
+            self.run_message("MUTATION_TOOLS = frozenset chứa Bash")
+        )
+
+    def test_underscore_citation_shorthand_is_not_treated_as_a_definition(
+        self,
+    ) -> None:
+        """A shortened `NAME_WITH_UNDERSCORE:line` citation is not a definition.
+
+        Before the fix, the capitalized segment after the underscore was
+        recognized as a bare token and the trailing `:<digits>` was read as
+        the extended colon form, turning a citation shorthand into a
+        fabricated-looking definition.
+        """
+        self.assert_passes(self.run_message("MINIMUM_CLAUDE_CODE:64"))
+
+    def test_known_bare_tokens_still_blocked_via_strict_paren_and_dash_forms(
+        self,
+    ) -> None:
+        """The underscore fix must not loosen the four strict forms.
+
+        `PASS` and `CAP` are members of ``KNOWN_BARE_TOKENS``. The design
+        intent documented at :41-46 is that this vocabulary is only exempt
+        from the *extended* forms (colon, arrow, table row); the four strict
+        forms - parenthesis, `=`, "là", dash - still apply to every token,
+        known or not. This pins that an explicit meaning attached to a known
+        status word is still an unproven definition and must stay blocked.
+        """
+        self.assert_blocks(self.run_message("PASS (exit 0)"), "PASS")
+        self.assert_blocks(self.run_message("CAP — gồm cả 4 lệnh"), "CAP")
+
+    def test_fabricated_definition_without_underscore_is_still_blocked(
+        self,
+    ) -> None:
+        """The fix is scoped to the underscore boundary, not a general loosening.
+
+        An unresolved business acronym paired with a made-up meaning in plain
+        prose has no underscore and no known-token membership, so it must
+        still be rejected for lack of a glossary entry or citation.
+        """
+        self.assert_blocks(
+            self.run_message(
+                "NDVLDTT = Nghiệp vụ đối soát liên doanh tự tạo"
+            ),
+            "NDVLDTT",
+        )
+
+    def test_repo_corpus_has_no_underscore_tail_token_extracted_as_a_definition(
+        self,
+    ) -> None:
+        """Narrow regression net for exactly the class of bug this patch fixes.
+
+        Running this same real extractor over this real corpus before the
+        token-boundary fix surfaced genuine false positives, unrelated to any
+        single fixture string: the segment after the last underscore of an
+        all-caps identifier (for example the tail of a Python-style constant
+        assignment, or the tail of a shortened `NAME_WITH_UNDERSCORE:line`
+        citation) was extracted as its own definition. This asserts that
+        class is gone from the real corpus by calling the real extractor
+        directly, instead of re-typing the original fixture strings.
+
+        This corpus is known to still trip the four strict/extended forms in
+        unrelated ways: a status code paired with an explicit meaning, a
+        labeled acronym followed by a description, a bare identifier used as
+        a worked example next to a parenthetical. That is a different class
+        of finding, the strict/extended forms and `KNOWN_BARE_TOKENS`
+        behaving exactly as designed, and fixing it would mean loosening
+        those forms or rewriting the documentation itself - neither of which
+        this patch does. So this test deliberately does not assert the
+        corpus is free of every gate violation; it only locks the
+        underscore-tail class this patch actually fixes.
+        """
+        module = _load_gloss_gate_module()
+        repo_root = self.harness.repo_root
+        paths = [repo_root / "README.md", repo_root / "policy" / "delegation.md"]
+        paths.extend(sorted((repo_root / "agents").glob("*.md")))
+        paths.extend(sorted((repo_root / "skills").glob("**/SKILL.md")))
+        self.assertTrue(paths, "corpus file list must not be empty")
+        for path in paths:
+            relative = path.relative_to(repo_root)
+            with self.subTest(path=str(relative)):
+                text = path.read_text(encoding="utf-8")
+                definitions = module._extract_definitions(text, 3)
+                offenders = [
+                    definition
+                    for definition in definitions
+                    if definition.start > 0 and text[definition.start - 1] == "_"
+                ]
+                self.assertEqual(
+                    [item.token for item in offenders],
+                    [],
+                    "{}: underscore-tail token(s) still extracted as a "
+                    "definition".format(relative),
+                )
 
 
 if __name__ == "__main__":

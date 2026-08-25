@@ -124,11 +124,11 @@ def _definition_pattern(minimum_length: int) -> re.Pattern[str]:
     token_tail_minimum = max(0, minimum_length - 1)
     token_tail_maximum = MAX_TOKEN_LENGTH - 1
     token = (
-        r"(?<![A-ZĐ0-9])"
+        r"(?<![A-ZĐ0-9_])"
         r"\*{0,2}"
         r"(?P<token>[A-ZĐ][A-ZĐ0-9]{%d,%d})"
         r"\*{0,2}"
-        r"(?![A-ZĐ0-9])" % (token_tail_minimum, token_tail_maximum)
+        r"(?![A-ZĐ0-9_])" % (token_tail_minimum, token_tail_maximum)
     )
     inline_end = r"(?=$|[;,\r\n]|[.](?:[ \t\r\n]|$))"
     return re.compile(
@@ -157,11 +157,11 @@ def _extended_definition_pattern(minimum_length: int) -> re.Pattern[str]:
     token_tail_minimum = max(0, minimum_length - 1)
     token_tail_maximum = MAX_TOKEN_LENGTH - 1
     token = (
-        r"(?<![A-ZĐ0-9])"
+        r"(?<![A-ZĐ0-9_])"
         r"\*{0,2}"
         r"(?P<token>[A-ZĐ][A-ZĐ0-9]{%d,%d})"
         r"\*{0,2}"
-        r"(?![A-ZĐ0-9])" % (token_tail_minimum, token_tail_maximum)
+        r"(?![A-ZĐ0-9_])" % (token_tail_minimum, token_tail_maximum)
     )
     inline_end = r"(?=$|[;,\r\n]|[.](?:[ \t\r\n]|$))"
     phrases = r"viết\s+tắt\s+của|nghĩa\s+là|tức\s+là|chính\s+là|được\s+hiểu\s+là|stands\s+for|tức"
