@@ -379,7 +379,10 @@ class PlanAndMigrationTests(TemporaryStateTestCase):
             self.assertIn("verification_records", tables)
         first = shared.StateStore(legacy_root)
         second = shared.StateStore(legacy_root)
-        self.assertEqual((first.busy_timeout_ms, second.busy_timeout_ms), (250, 250))
+        self.assertEqual(
+            (first.busy_timeout_ms, second.busy_timeout_ms),
+            (shared.DEFAULT_BUSY_TIMEOUT_MS, shared.DEFAULT_BUSY_TIMEOUT_MS),
+        )
         self.assertTrue(second.check_plan("legacy-session", "legacy-prompt", "legacy-plan"))
 
     def test_future_schema_fails_closed(self) -> None:
@@ -620,8 +623,14 @@ class StateSecurityAndConcurrencyTests(TemporaryStateTestCase):
             shared.StateStore(root_link)
 
     def test_busy_timeout_is_clamped_and_lock_contention_is_bounded(self) -> None:
-        self.assertEqual(shared.StateStore(self.base / "low", -1).busy_timeout_ms, 50)
-        self.assertEqual(shared.StateStore(self.base / "high", 99_999).busy_timeout_ms, 1_000)
+        self.assertEqual(
+            shared.StateStore(self.base / "low", -1).busy_timeout_ms,
+            shared.MINIMUM_BUSY_TIMEOUT_MS,
+        )
+        self.assertEqual(
+            shared.StateStore(self.base / "high", 99_999).busy_timeout_ms,
+            shared.MAXIMUM_BUSY_TIMEOUT_MS,
+        )
         locker = sqlite3.connect(str(self.store.db_path), isolation_level=None)
         self.addCleanup(locker.close)
         locker.execute("BEGIN IMMEDIATE")

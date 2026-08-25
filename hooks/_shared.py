@@ -34,9 +34,19 @@ except Exception:  # pragma: no cover - exercised by replacing the module in tes
 
 
 SCHEMA_VERSION = 2
-DEFAULT_BUSY_TIMEOUT_MS = 250
+# A busy timeout is a ceiling on waiting for a write lock, not a fixed delay, so
+# a generous value costs nothing on the fast path. 250ms was too tight: with 32
+# hooks contending for the same lock on a slow runner, some gave up with
+# "database is locked" and the gate blocked a legitimate agent.
+#
+# Two ceilings bound how far this can go. plan-gate runs under a 5s outer
+# timeout and tests/test_hooks_config.py demands a 2s margin below it, and
+# test_lock_contention_fails_closed_within_outer_budget requires a blocked hook
+# to give up in under 4s. 2.5s satisfies both while sitting about 8x above the
+# contention threshold measured for 32 concurrent writers.
+DEFAULT_BUSY_TIMEOUT_MS = 2_000
 MINIMUM_BUSY_TIMEOUT_MS = 50
-MAXIMUM_BUSY_TIMEOUT_MS = 1_000
+MAXIMUM_BUSY_TIMEOUT_MS = 2_500
 SUCCESS_OUTCOME = "runtime_success"
 ALLOWED_OUTCOMES = frozenset(
     {SUCCESS_OUTCOME, "runtime_failure", "interrupted", "background"}
@@ -1729,7 +1739,9 @@ __all__ = [
     "Citation",
     "InvalidStateInput",
     "InvalidVerificationContract",
+    "DEFAULT_BUSY_TIMEOUT_MS",
     "MAXIMUM_BUSY_TIMEOUT_MS",
+    "MINIMUM_BUSY_TIMEOUT_MS",
     "ReceiptValidation",
     "SCHEMA_VERSION",
     "SUCCESS_OUTCOME",

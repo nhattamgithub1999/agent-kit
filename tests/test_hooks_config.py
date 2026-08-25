@@ -131,7 +131,7 @@ class HooksConfigTests(unittest.TestCase):
                         self.assertTrue((REPO_ROOT / relative_path).is_file(), arg)
 
     def test_stateful_hooks_have_busy_timeout_margin(self) -> None:
-        self.assertEqual(MAXIMUM_BUSY_TIMEOUT_MS, 1000)
+        self.assertEqual(MAXIMUM_BUSY_TIMEOUT_MS, 2500)
         for event, groups in self.events.items():
             for group in groups:
                 for hook in group["hooks"]:

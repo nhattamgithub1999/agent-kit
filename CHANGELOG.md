@@ -60,6 +60,11 @@ khi nâng cấp.
 
 ### Fixed
 
+- Nâng trần chờ write lock của SQLite từ 250ms lên 2000ms (trần tối đa 2500ms).
+  Mức cũ quá hẹp: khi nhiều hook cùng giành lock trên runner chậm, một tiến
+  trình nhận `database is locked` và gate chặn oan một agent hợp lệ. Trần mới
+  vẫn nằm dưới ngân sách outer timeout 5s của `plan-gate` và dưới mốc 4s mà
+  test lock contention yêu cầu để fail-closed.
 - Đóng đường mutation qua `Bash`, `PowerShell`, `Monitor`, worktree và
   `mcp__.*` trước khi plan được duyệt.
 - Không còn mở plan gate sớm từ `PreToolUse`, `EnterPlanMode`, `TodoWrite` hoặc
