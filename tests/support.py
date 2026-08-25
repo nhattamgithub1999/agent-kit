@@ -23,6 +23,25 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 HOOKS_DIR = REPO_ROOT / "hooks"
 DEFAULT_BUILDER_AGENT = "agent-kit:builder"
 
+
+class _OmitField:
+    """Sentinel meaning "drop this key from the payload entirely".
+
+    ``PayloadFactory`` builder methods give every field a product-realistic
+    default so existing call sites keep behaving exactly as before. Passing a
+    plain empty string only ever produced a key with an empty value, never an
+    absent key, which cannot exercise "this field is missing from the event"
+    behavior (e.g. a main-session event that never carries ``agent_id`` at
+    all). Passing ``OMIT`` for a keyword instead removes that key from the
+    built payload dict, matching a real event that never included it.
+    """
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid only
+        return "<OMIT>"
+
+
+OMIT: Any = _OmitField()
+
 # A developer's shell may contain overrides used while manually debugging a
 # hook.  Tests must start from product defaults, then opt in to an override on
 # the individual HookCall that needs it.
@@ -116,6 +135,8 @@ class PayloadFactory:
             "hook_event_name": event,
         }
         payload.update(extra)
+        for key in [key for key, value in payload.items() if value is OMIT]:
+            del payload[key]
         return payload
 
     def user_prompt_submit(
@@ -387,6 +408,7 @@ class HookHarness:
 __all__ = [
     "DEFAULT_BUILDER_AGENT",
     "HOOKS_DIR",
+    "OMIT",
     "REPO_ROOT",
     "HookCall",
     "HookHarness",
