@@ -23,6 +23,7 @@ from _shared import (
     StateStore,
     VerificationContract,
     bump_stop_retry_attempts,
+    configure_stdio,
     get_field,
     secure_dump,
     secure_log,
@@ -544,6 +545,7 @@ def _dispatch(payload: Mapping[str, Any]) -> int:
 
 
 def main() -> int:
+    configure_stdio()
     raw = sys.stdin.read()
     try:
         payload = json.loads(raw)

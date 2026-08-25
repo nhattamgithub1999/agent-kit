@@ -26,7 +26,7 @@ import stat
 import sys
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
-from _shared import StateError, StateStore, get_field, secure_log
+from _shared import StateError, StateStore, configure_stdio, get_field, secure_log
 
 
 MINIMUM_CLAUDE_CODE = "2.1.196"
@@ -90,13 +90,20 @@ def _scope_block() -> int:
     )
 
 
-def _state_block() -> int:
-    return _block(
+def _state_block(exc: Optional[BaseException] = None) -> int:
+    message = (
         "không truy cập được kho trạng thái an toàn; mutation/approval bị chặn "
         "để tránh dùng nhầm trạng thái. Kiểm tra Python sqlite3 và "
-        "CLAUDE_PLUGIN_DATA rồi thử lại.",
-        "state_unavailable",
+        "CLAUDE_PLUGIN_DATA rồi thử lại."
     )
+    if exc is not None:
+        # The exception message never contains raw paths/secrets beyond what
+        # StateStore already puts there; surfacing it turns an opaque CI
+        # failure into a diagnosable one (see StateUnavailable call sites in
+        # _shared.py). Exit code and the Vietnamese prefix stay unchanged.
+        message = "{} Nguyên nhân: {}".format(message, exc)
+        _best_effort_log("plan_gate.state_unavailable", detail=str(exc))
+    return _block(message, "state_unavailable")
 
 
 def is_mutation_tool(tool_name: Any) -> bool:
@@ -335,8 +342,8 @@ def _handle_pre_tool(payload: Mapping[str, Any], tool: str) -> int:
         return _scope_block()
     try:
         store = StateStore()
-    except StateError:
-        return _state_block()
+    except StateError as exc:
+        return _state_block(exc)
 
     if approval_path:
         valid, detail = validate_plan(_input_plan(payload))
@@ -355,8 +362,8 @@ def _handle_pre_tool(payload: Mapping[str, Any], tool: str) -> int:
 
     try:
         approved = store.check_plan(*scope)
-    except StateError:
-        return _state_block()
+    except StateError as exc:
+        return _state_block(exc)
     if approved:
         return 0
     return _block(
@@ -385,14 +392,15 @@ def _handle_post_tool(payload: Mapping[str, Any], tool: str) -> int:
         )
     try:
         StateStore().approve_plan(scope[0], scope[1], plan)
-    except StateError:
-        return _state_block()
+    except StateError as exc:
+        return _state_block(exc)
     _best_effort_log("plan_gate.plan_approved", result="approved")
     return 0
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     del argv
+    configure_stdio()
     if os.environ.get("PLAN_GATE", "").strip().casefold() == "off":
         return 0
     try:

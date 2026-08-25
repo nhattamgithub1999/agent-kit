@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from _shared import (
+    configure_stdio,
     default_state_root,
     get_field,
     hash_value,
@@ -510,6 +511,7 @@ def _blocked_message(violations: Sequence[Violation]) -> str:
 
 
 def main() -> int:
+    configure_stdio()
     mode = _mode()
     if mode == "off":
         return 0

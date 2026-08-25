@@ -60,6 +60,17 @@ khi nâng cấp.
 
 ### Fixed
 
+- Hook ép UTF-8 cho stdin/stdout/stderr trước khi chạm protocol. Trước đó mọi
+  hook in `json.dumps(..., ensure_ascii=False)` tiếng Việt ra stream mang
+  encoding console mặc định; trên Windows (cp1252/cp437) hook chết bằng
+  `UnicodeEncodeError` và CI Windows fail 52 test.
+- Ngân sách chờ write lock của SQLite tính cho TRỌN một transaction/reader thay
+  vì cho từng câu lệnh. `PRAGMA journal_mode = WAL` và `BEGIN IMMEDIATE` trước
+  đây mỗi câu được cấp trọn `busy_timeout` riêng, nên tổng thời gian chờ có thể
+  chạm 2x trần và vượt outer timeout 5s của `plan-gate`.
+- `plan-gate` nêu nguyên nhân gốc của `StateError` trong thông điệp chặn và log
+  `plan_gate.state_unavailable`, thay vì chỉ một câu chung chung không chẩn
+  đoán được từ log CI.
 - Nâng trần chờ write lock của SQLite từ 250ms lên 2000ms (trần tối đa 2500ms).
   Mức cũ quá hẹp: khi nhiều hook cùng giành lock trên runner chậm, một tiến
   trình nhận `database is locked` và gate chặn oan một agent hợp lệ. Trần mới

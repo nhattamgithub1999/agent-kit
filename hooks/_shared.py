@@ -23,6 +23,7 @@ import pathlib
 import re
 import secrets
 import stat
+import sys
 import time
 import unicodedata
 from typing import Any, Dict, Iterator, Mapping, Optional, Sequence, Tuple
@@ -31,6 +32,36 @@ try:  # Some minimal Python builds omit the optional sqlite3 extension.
     import sqlite3 as _sqlite3
 except Exception:  # pragma: no cover - exercised by replacing the module in tests.
     _sqlite3 = None
+
+
+def configure_stdio() -> None:
+    """Force UTF-8 on stdin/stdout/stderr before a hook touches the protocol.
+
+    Every hook emits ``json.dumps(..., ensure_ascii=False)`` and some write
+    Vietnamese diagnostics to stderr. Python's default stream encoding on
+    Windows mirrors the console code page (commonly cp1252 or cp437), which
+    cannot represent that text and crashes with ``UnicodeEncodeError`` on the
+    real, non-UTF-8 consoles Claude Code hooks run under. ``TextIOWrapper``
+    has supported ``reconfigure`` since Python 3.7 (this project targets
+    3.9+, see the module docstring), so it is safe to call unconditionally.
+
+    This is defensive on purpose: a test harness may replace ``sys.stdin``/
+    ``sys.stdout``/``sys.stderr`` with an object that has no ``reconfigure``
+    method (or one that raises), and a hook must never crash -- let alone
+    fail open on a mutation gate -- merely because it tried to fix its own
+    encoding. ``errors="replace"`` also means malformed bytes on stdin (a
+    hostile or corrupted payload) degrade to replacement characters instead
+    of raising during decode.
+    """
+
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
 
 
 SCHEMA_VERSION = 2
@@ -591,19 +622,48 @@ class StateStore:
         except Exception as exc:
             raise StateUnavailable("cannot initialize SQLite state: {}".format(exc)) from exc
 
-    def _connect(self):
+    @staticmethod
+    def _remaining_busy_timeout_ms(deadline: float) -> int:
+        """Milliseconds left until ``deadline``, floored at 1ms.
+
+        A budget of 0 tells SQLite's busy handler not to wait at all, which
+        reads as "the lock is free" rather than "the budget is exhausted".
+        Flooring at 1ms keeps one more retry available so exhaustion still
+        surfaces as ``sqlite3.OperationalError: database is locked`` (wrapped
+        below into ``StateUnavailable``) instead of silently skipping the
+        wait and returning a false success.
+        """
+
+        remaining_seconds = deadline - time.monotonic()
+        return max(1, int(remaining_seconds * 1000))
+
+    def _connect(self, deadline: Optional[float] = None):
         assert _sqlite3 is not None
         _secure_regular_file(self.db_path)
+        if deadline is None:
+            deadline = time.monotonic() + self.busy_timeout_ms / 1000.0
         connection = None
         try:
+            remaining_ms = self._remaining_busy_timeout_ms(deadline)
             connection = _sqlite3.connect(
                 str(self.db_path),
-                timeout=self.busy_timeout_ms / 1000.0,
+                timeout=remaining_ms / 1000.0,
                 isolation_level=None,
             )
             connection.row_factory = _sqlite3.Row
-            connection.execute("PRAGMA busy_timeout = {}".format(self.busy_timeout_ms))
+            connection.execute("PRAGMA busy_timeout = {}".format(remaining_ms))
             connection.execute("PRAGMA foreign_keys = ON")
+            # "PRAGMA journal_mode = WAL" can itself block on a held write
+            # lock. Re-arm busy_timeout against the same deadline right
+            # before issuing it so this statement and the caller's later
+            # BEGIN IMMEDIATE share one ceiling instead of each getting a
+            # fresh busy_timeout allowance (that doubling is what let total
+            # wait exceed the outer hook timeout under lock contention).
+            connection.execute(
+                "PRAGMA busy_timeout = {}".format(
+                    self._remaining_busy_timeout_ms(deadline)
+                )
+            )
             connection.execute("PRAGMA journal_mode = WAL")
             _secure_regular_file(self.db_path)
             for suffix in ("-wal", "-shm"):
@@ -620,8 +680,18 @@ class StateStore:
 
     @contextlib.contextmanager
     def _transaction(self) -> Iterator[Any]:
-        connection = self._connect()
+        # One deadline for the whole transaction's lifetime: _connect's own
+        # blocking PRAGMA and this method's BEGIN IMMEDIATE must share the
+        # same busy-timeout budget rather than each waiting up to
+        # self.busy_timeout_ms independently.
+        deadline = time.monotonic() + self.busy_timeout_ms / 1000.0
+        connection = self._connect(deadline)
         try:
+            connection.execute(
+                "PRAGMA busy_timeout = {}".format(
+                    self._remaining_busy_timeout_ms(deadline)
+                )
+            )
             connection.execute("BEGIN IMMEDIATE")
             yield connection
             connection.execute("COMMIT")
@@ -642,7 +712,9 @@ class StateStore:
 
     @contextlib.contextmanager
     def _reader(self) -> Iterator[Any]:
-        connection = self._connect()
+        # Shares the same one-deadline-per-lifetime contract as _transaction.
+        deadline = time.monotonic() + self.busy_timeout_ms / 1000.0
+        connection = self._connect(deadline)
         try:
             yield connection
         except StateError:
@@ -653,6 +725,15 @@ class StateStore:
             connection.close()
 
     def _initialize(self) -> None:
+        # NOTE: a read-only fast path here (skip this write transaction
+        # when PRAGMA user_version already equals SCHEMA_VERSION) would cut
+        # the write-lock contention of concurrent hooks in half, but it was
+        # measured to remove real coverage: under WAL a reader never blocks
+        # on a held BEGIN IMMEDIATE writer, so this unconditional write
+        # transaction is the only thing that makes a StateStore() built
+        # while another process holds the write lock fail closed. See
+        # tests/test_plan_gate.py::PlanGateTests::
+        # test_lock_contention_fails_closed_within_outer_budget.
         with self._transaction() as connection:
             current = int(connection.execute("PRAGMA user_version").fetchone()[0])
             if current > SCHEMA_VERSION or current < 0:
@@ -1755,6 +1836,7 @@ __all__ = [
     "VerificationStepSpec",
     "VERIFICATION_STEPS",
     "bump_stop_retry_attempts",
+    "configure_stdio",
     "default_state_root",
     "get_field",
     "hash_value",

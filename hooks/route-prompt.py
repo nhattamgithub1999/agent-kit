@@ -13,6 +13,8 @@ import sys
 import unicodedata
 from typing import Dict, Optional, Set, Tuple
 
+from _shared import configure_stdio
+
 
 DEFAULT_MIN_CHARS = 12
 MIN_MIN_CHARS = 0
@@ -278,6 +280,7 @@ def _extract_prompt(payload: object) -> Optional[str]:
 
 
 def main() -> int:
+    configure_stdio()
     try:
         payload = json.loads(sys.stdin.read())
     except (json.JSONDecodeError, TypeError, ValueError):

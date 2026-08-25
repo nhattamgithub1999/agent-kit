@@ -17,6 +17,8 @@ import pathlib
 import sys
 from typing import Any, Dict, Optional
 
+from _shared import configure_stdio
+
 
 # Policy text is normally only a few KiB. Refuse unexpectedly large files
 # rather than flooding Claude Code's context or injecting a truncated policy.
@@ -80,6 +82,7 @@ def read_policy(path: pathlib.Path) -> Optional[str]:
 
 
 def main() -> int:
+    configure_stdio()
     if os.environ.get("POLICY_HOOK", "").strip().casefold() == "off":
         return 0
 

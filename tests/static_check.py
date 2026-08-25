@@ -87,6 +87,8 @@ def run(
             capture_output=True,
             check=False,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     except FileNotFoundError as exc:
         print(f"[FAIL] command not found: {command[0]}", flush=True)

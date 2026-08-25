@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import pathlib
 import sqlite3
@@ -135,7 +136,10 @@ class HelperAndContractTests(unittest.TestCase):
 
     def test_default_state_root_uses_plugin_data_or_private_home(self) -> None:
         plugin = shared.default_state_root({"CLAUDE_PLUGIN_DATA": "/private/plugin"})
-        self.assertEqual(plugin, pathlib.Path("/private/plugin/agent-kit"))
+        self.assertEqual(
+            plugin,
+            pathlib.Path("/private/plugin").expanduser().absolute() / "agent-kit",
+        )
         self.assertEqual(
             shared.default_state_root({}), pathlib.Path.home() / ".claude" / "agent-kit"
         )
@@ -258,7 +262,7 @@ class PlanAndMigrationTests(TemporaryStateTestCase):
     def create_v1_database(root: pathlib.Path) -> None:
         root.mkdir(mode=0o700, parents=True)
         path = root / "state.sqlite3"
-        with sqlite3.connect(str(path)) as connection:
+        with contextlib.closing(sqlite3.connect(str(path))) as connection, connection:
             connection.executescript(
                 """
                 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -338,7 +342,7 @@ class PlanAndMigrationTests(TemporaryStateTestCase):
         self.create_v1_database(legacy_root)
         migrated = shared.StateStore(legacy_root)
         self.assertTrue(migrated.check_plan("legacy-session", "legacy-prompt", "legacy-plan"))
-        with sqlite3.connect(str(migrated.db_path)) as connection:
+        with contextlib.closing(sqlite3.connect(str(migrated.db_path))) as connection, connection:
             self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM verification_events").fetchone()[0], 0)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM mutation_epochs").fetchone()[0], 0)
@@ -372,7 +376,7 @@ class PlanAndMigrationTests(TemporaryStateTestCase):
         with mock.patch.object(shared.StateStore, "_create_v2_schema", side_effect=RuntimeError("boom")):
             with self.assertRaises(shared.StateUnavailable):
                 shared.StateStore(legacy_root)
-        with sqlite3.connect(str(legacy_root / "state.sqlite3")) as connection:
+        with contextlib.closing(sqlite3.connect(str(legacy_root / "state.sqlite3"))) as connection, connection:
             self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM plan_approvals").fetchone()[0], 1)
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -388,7 +392,7 @@ class PlanAndMigrationTests(TemporaryStateTestCase):
     def test_future_schema_fails_closed(self) -> None:
         root = self.base / "future"
         root.mkdir()
-        with sqlite3.connect(str(root / "state.sqlite3")) as connection:
+        with contextlib.closing(sqlite3.connect(str(root / "state.sqlite3"))) as connection, connection:
             connection.execute("PRAGMA user_version = 99")
         with self.assertRaisesRegex(shared.StateUnavailable, "unsupported state schema"):
             shared.StateStore(root)
@@ -453,7 +457,7 @@ class VerificationStateTests(TemporaryStateTestCase):
         self.full_chain(suffix="owner")
         owner_hash = shared.hash_value("agent-A", "agent")
         other_hash = shared.hash_value("agent-B", "agent")
-        with sqlite3.connect(str(self.store.db_path)) as connection:
+        with contextlib.closing(sqlite3.connect(str(self.store.db_path))) as connection, connection:
             before = connection.execute(
                 "SELECT COUNT(*) FROM verification_live WHERE agent_hash = ?",
                 (owner_hash,),
@@ -462,7 +466,7 @@ class VerificationStateTests(TemporaryStateTestCase):
 
         self.record("build", "other-agent-fail", agent="agent-B", outcome="runtime_failure")
 
-        with sqlite3.connect(str(self.store.db_path)) as connection:
+        with contextlib.closing(sqlite3.connect(str(self.store.db_path))) as connection, connection:
             after_owner = connection.execute(
                 "SELECT COUNT(*) FROM verification_live WHERE agent_hash = ?",
                 (owner_hash,),
@@ -670,7 +674,7 @@ class StateSecurityAndConcurrencyTests(TemporaryStateTestCase):
         self.assertEqual(
             self.store.current_mutation_epoch(self.project, "thread-session", "thread-prompt"), 20
         )
-        with sqlite3.connect(str(self.store.db_path)) as connection:
+        with contextlib.closing(sqlite3.connect(str(self.store.db_path))) as connection, connection:
             self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "wal")
 

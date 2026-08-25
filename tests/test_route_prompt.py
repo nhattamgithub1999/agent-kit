@@ -43,7 +43,7 @@ def run_hook(
     child_env.pop("ROUTE_MIN_CHARS", None)
     if env:
         child_env.update(env)
-    stdin = raw_stdin if raw_stdin is not None else json.dumps(payload)
+    stdin = raw_stdin if raw_stdin is not None else json.dumps(payload, ensure_ascii=False)
     completed = subprocess.run(
         [sys.executable, str(HOOK)],
         cwd=str(ROOT),
@@ -51,6 +51,8 @@ def run_hook(
         input=stdin,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     return HookResult(completed)
