@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import contextlib
+import json
 import os
 import pathlib
 import sqlite3
 import stat
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -677,6 +681,70 @@ class StateSecurityAndConcurrencyTests(TemporaryStateTestCase):
         with contextlib.closing(sqlite3.connect(str(self.store.db_path))) as connection, connection:
             self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
             self.assertEqual(connection.execute("PRAGMA journal_mode").fetchone()[0], "wal")
+
+    def test_concurrent_processes_never_lose_a_log_record(self) -> None:
+        """Appends from separate processes must all survive.
+
+        POSIX O_APPEND resolves the end offset inside write(); the Windows CRT
+        emulates it with lseek(END) + write, so unsynchronised writers can pick
+        the same offset and one record overwrites the other. This drove an
+        intermittent CI failure where 32 concurrent hooks produced 31 lines.
+        """
+
+        writers = 8
+        records = 40
+        writer_source = self.base / "log_writer.py"
+        writer_source.write_text(
+            "\n".join(
+                (
+                    "import pathlib, sys",
+                    "sys.path.insert(0, sys.argv[1])",
+                    "from hooks import _shared",
+                    "worker = int(sys.argv[3])",
+                    "for index in range(int(sys.argv[4])):",
+                    "    _shared.secure_log(",
+                    "        'concurrent-append',",
+                    "        {'epoch': worker, 'count': index},",
+                    "        root=pathlib.Path(sys.argv[2]),",
+                    "        max_bytes=4 * 1024 * 1024,",
+                    "    )",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        repo_root = str(pathlib.Path(shared.__file__).resolve().parent.parent)
+
+        def spawn(worker: int) -> int:
+            return subprocess.run(
+                [
+                    sys.executable,
+                    str(writer_source),
+                    repo_root,
+                    str(self.state_root),
+                    str(worker),
+                    str(records),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            ).returncode
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=writers) as pool:
+            self.assertEqual(list(pool.map(spawn, range(writers))), [0] * writers)
+
+        log = self.state_root / "agent-kit.log"
+        lines = log.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), writers * records)
+        written = {
+            (entry["fields"]["epoch"], entry["fields"]["count"])
+            for entry in (json.loads(line) for line in lines)
+        }
+        self.assertEqual(
+            written,
+            {(worker, index) for worker in range(writers) for index in range(records)},
+        )
 
     def test_missing_sqlite_fails_closed_with_actionable_error(self) -> None:
         with mock.patch.object(shared, "_sqlite3", None):

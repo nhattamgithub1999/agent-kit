@@ -1645,14 +1645,122 @@ def _rotate(path: pathlib.Path) -> None:
         raise StateUnavailable("cannot rotate state file {}: {}".format(path, exc)) from exc
 
 
+# Concurrent hooks append to one log, so the append has to be atomic against
+# other processes. POSIX gives that for free: O_APPEND makes the kernel resolve
+# the end offset inside the same write(). The Windows CRT only emulates
+# O_APPEND with an lseek(END) followed by a write, so two hooks can resolve the
+# same offset and one record silently overwrites the other. Both platforms
+# therefore take an exclusive byte-range lock around the write.
+#
+# The lock sits far past the end of any log (the cap tops out at 4 MiB), so the
+# locked region never overlaps bytes anyone reads or writes; it is a pure
+# rendezvous point. Locking beyond EOF is explicitly supported by both
+# LockFile() and fcntl record locks.
+_APPEND_LOCK_OFFSET = 1 << 40
+
+
+# Logging is best-effort and runs inside a hook that has its own outer timeout,
+# so waiting for the lock is bounded. A writer holds it for one write() of a
+# capped record, so this ceiling is orders of magnitude above real contention.
+_APPEND_LOCK_TIMEOUT_SECONDS = 1.0
+
+
+def _try_lock_append_region(descriptor: int) -> bool:
+    """One non-blocking attempt at the append lock."""
+
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(descriptor, _APPEND_LOCK_OFFSET, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+        return True
+    import fcntl
+
+    fcntl.lockf(
+        descriptor,
+        fcntl.LOCK_EX | fcntl.LOCK_NB,
+        1,
+        _APPEND_LOCK_OFFSET,
+        os.SEEK_SET,
+    )
+    return True
+
+
+def _lock_append_region(descriptor: int) -> bool:
+    """Take the exclusive cross-process append lock; report whether it held.
+
+    Both platforms spin on a non-blocking attempt rather than a blocking one.
+    msvcrt's blocking mode retries only once per second, which turns ordinary
+    contention into multi-second stalls, and an unbounded POSIX wait could
+    outlive the hook's outer timeout.
+
+    A lock failure degrades to plain O_APPEND rather than losing the record:
+    on POSIX that is still atomic, and on Windows it is no worse than the
+    behaviour this lock exists to fix.
+    """
+
+    deadline = time.monotonic() + _APPEND_LOCK_TIMEOUT_SECONDS
+    delay = 0.001
+    while True:
+        try:
+            return _try_lock_append_region(descriptor)
+        except ImportError:  # pragma: no cover - both modules ship with CPython.
+            return False
+        except OSError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(delay)
+            delay = min(delay * 2, 0.05)
+
+
+def _unlock_append_region(descriptor: int) -> None:
+    """Release the append lock; the descriptor is closed either way."""
+
+    if os.name == "nt":
+        try:
+            import msvcrt
+
+            os.lseek(descriptor, _APPEND_LOCK_OFFSET, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        except (ImportError, OSError):
+            pass
+        return
+    try:
+        import fcntl
+
+        fcntl.lockf(
+            descriptor, fcntl.LOCK_UN, 1, _APPEND_LOCK_OFFSET, os.SEEK_SET
+        )
+    except (ImportError, OSError):
+        pass
+
+
+def _write_all(descriptor: int, data: bytes) -> None:
+    """Write every byte, since one os.write() may be short for large records."""
+
+    view = memoryview(data)
+    while view:
+        view = view[os.write(descriptor, view):]
+
+
 def _write_private(path: pathlib.Path, data: bytes, append: bool = False) -> None:
     _secure_regular_file(path)
-    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
+    # Without O_BINARY the Windows CRT rewrites every "\n" as "\r\n", which
+    # desynchronises the byte cap from the bytes actually on disk.
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_BINARY", 0)
+    flags |= os.O_APPEND if append else os.O_TRUNC
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(str(path), flags | nofollow, 0o600)
-        with os.fdopen(descriptor, "ab" if append else "wb") as handle:
-            handle.write(data)
+        try:
+            locked = _lock_append_region(descriptor) if append else False
+            try:
+                _write_all(descriptor, data)
+            finally:
+                if locked:
+                    _unlock_append_region(descriptor)
+        finally:
+            os.close(descriptor)
         _secure_regular_file(path)
     except StateError:
         raise

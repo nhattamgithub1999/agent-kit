@@ -8,7 +8,7 @@ import subprocess
 import time
 import unittest
 
-from hooks._shared import StateStore
+from hooks._shared import MAXIMUM_BUSY_TIMEOUT_MS, StateStore
 from tests.support import HookCall, HookHarness
 
 
@@ -422,7 +422,23 @@ class PlanGateTests(unittest.TestCase):
             self.assertTrue(result.blocked, result.stderr)
 
     def test_lock_contention_fails_closed_within_outer_budget(self) -> None:
-        with HookHarness(timeout=4.5) as harness:
+        # What the hook controls is how long it waits for the write lock, not
+        # how long the interpreter takes to boot. Interpreter start-up swings by
+        # seconds between CI runners, so a hard wall-clock ceiling on the whole
+        # subprocess measures the runner, not the gate. Measure start-up on this
+        # machine first and hold only the wait itself to the clamped budget.
+        # The generous subprocess timeout is deliberate: a regression must show
+        # up as a measured number, not an opaque TimeoutExpired.
+        with HookHarness(timeout=60.0) as harness:
+            started = time.monotonic()
+            bypass = harness.run(
+                HOOK,
+                harness.payloads.pre_tool_use("Write"),
+                env={"PLAN_GATE": "OFF"},
+            )
+            startup = time.monotonic() - started
+            self.assertEqual(bypass.returncode, 0, bypass.stderr)
+
             store = StateStore(harness.plugin_data_dir / "agent-kit")
             connection = sqlite3.connect(
                 str(store.db_path), timeout=1.0, isolation_level=None
@@ -442,7 +458,15 @@ class PlanGateTests(unittest.TestCase):
 
             self.assertTrue(result.blocked, result.stderr)
             self.assertIn("trạng thái", result.stderr)
-            self.assertLess(elapsed, 4.0, elapsed)
+            # 20000ms was requested above; MAXIMUM_BUSY_TIMEOUT_MS has to clamp
+            # it, which is what keeps the hook inside the outer hook timeout
+            # asserted by tests/test_hooks_config.py.
+            waited = elapsed - startup
+            self.assertLess(
+                waited,
+                MAXIMUM_BUSY_TIMEOUT_MS / 1000.0 + 1.5,
+                "waited={} elapsed={} startup={}".format(waited, elapsed, startup),
+            )
 
     def test_plan_gate_off_is_explicit_bypass_and_bad_legacy_env_does_not_crash(self) -> None:
         with HookHarness() as harness:
