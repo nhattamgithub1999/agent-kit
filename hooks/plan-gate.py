@@ -18,6 +18,7 @@ emergency bypass.
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import pathlib
@@ -109,6 +110,42 @@ def _state_block(exc: Optional[BaseException] = None) -> int:
 def is_mutation_tool(tool_name: Any) -> bool:
     tool = str(tool_name or "")
     return tool in MUTATION_TOOLS or tool.startswith("mcp__")
+
+
+def _bash_is_read_only(payload: Mapping[str, Any]) -> bool:
+    """Fail-closed check for a provably read-only ``Bash`` call.
+
+    This reuses ``hooks/no-fake-pass.py``'s own read-only allowlist and
+    dangerous-token denylist so the two hooks share one source of truth
+    instead of two copies drifting apart. The module has a hyphenated
+    filename, so it is loaded via ``importlib`` rather than a normal
+    ``import`` statement; the same mechanism ``gloss-gate.py``'s own bare
+    ``from _shared import ...`` already relies on for finding sibling
+    modules in this directory.
+
+    Only ``Bash`` ever calls this. ``PowerShell`` is intentionally never
+    exempted here: its call operators are not covered by the write-sign
+    regex this reuses, so an approved plan is always required for it. A
+    missing or non-string ``command`` field, or any import/lookup failure,
+    returns ``False`` (not read-only, still needs an approved plan) rather
+    than silently exempting an unrecognized shape.
+    """
+
+    tool_input = get_field(payload, "tool_input")
+    if not isinstance(tool_input, Mapping):
+        return False
+    command = get_field(tool_input, "command")
+    if not isinstance(command, str) or not command:
+        return False
+    try:
+        no_fake_pass = importlib.import_module("no-fake-pass")
+        checker = no_fake_pass._is_read_only_shell_command
+    except Exception:
+        return False
+    try:
+        return bool(checker(command))
+    except Exception:
+        return False
 
 
 def validate_plan(plan: Any) -> Tuple[bool, str]:
@@ -335,6 +372,10 @@ def _handle_pre_tool(payload: Mapping[str, Any], tool: str) -> int:
     if not approval_path and not mutation:
         # EnterPlanMode and TodoWrite are intentionally passive: allowed, but
         # neither creates nor implies an approval.
+        return 0
+
+    if tool == "Bash" and _bash_is_read_only(payload):
+        _best_effort_log("plan_gate.bash_readonly_exempt", result="exempt")
         return 0
 
     scope = _scope(payload)

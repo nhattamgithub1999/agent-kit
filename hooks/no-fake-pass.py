@@ -66,6 +66,27 @@ READ_ONLY_SHELL_PREFIXES = (
     "which",
 )
 _SHELL_WRITE_SIGNS = re.compile(r">>|>|\btee\b|\||;|&&|\|\||`|\$\(|\n")
+# A read-only prefix match alone is not enough: some of these accept flags
+# that write to disk or execute an arbitrary sub-command without ever
+# tripping a redirect/pipe/chain/substitution sign above (Loi 7). `find`'s
+# action primitives write, delete, or exec; `git diff --output` writes the
+# diff to a file instead of stdout. The exemption is lost the moment any of
+# these tokens appears anywhere in the command, on top of the write-sign and
+# prefix checks in ``_is_read_only_shell_command``.
+_PREFIX_DANGEROUS_TOKENS: Mapping[str, Tuple[str, ...]] = {
+    "find": (
+        "-delete",
+        "-exec",
+        "-execdir",
+        "-ok",
+        "-okdir",
+        "-fprint",
+        "-fprint0",
+        "-fprintf",
+        "-fls",
+    ),
+    "git diff": ("--output",),
+}
 RESULT_PREFIX = "AGENT_KIT_RESULT_V1="
 RECEIPT_PREFIX = "AGENT_KIT_RECEIPT_V1="
 MINIMUM_CLAUDE_CODE = "2.1.196"
@@ -257,15 +278,19 @@ def _is_read_only_shell_command(command: str) -> bool:
     Any redirect/pipe/chain/substitution sign disqualifies the command
     outright, regardless of prefix (Loi 6 point 3); everything not on the
     allowlist keeps counting as a mutation exactly as before (Loi 6 point 2).
+    A matched prefix loses the exemption the moment the command also
+    contains one of that prefix's dangerous tokens (Loi 7), since those
+    write, delete, or exec without needing a write-sign character at all.
     """
 
     if _SHELL_WRITE_SIGNS.search(command):
         return False
     stripped = command.strip()
-    return any(
-        stripped == prefix or stripped.startswith(prefix + " ")
-        for prefix in READ_ONLY_SHELL_PREFIXES
-    )
+    for prefix in READ_ONLY_SHELL_PREFIXES:
+        if stripped == prefix or stripped.startswith(prefix + " "):
+            dangerous = _PREFIX_DANGEROUS_TOKENS.get(prefix, ())
+            return not any(token in stripped for token in dangerous)
+    return False
 
 
 def _shell_outcome(payload: Mapping[str, Any], event: str) -> str:

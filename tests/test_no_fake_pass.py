@@ -792,6 +792,49 @@ class NoFakePassV2Tests(unittest.TestCase):
         self.assertEqual(self.state_epoch(prompt_id="disguised-shell"), 1)
         self.assertTrue(self.ready(receipts, prompt_id="disguised-shell").blocked)
 
+    def test_find_with_delete_flag_still_counts_as_mutation(self) -> None:
+        # Loi 7: `find` is on the read-only allowlist, but `-delete` (and the
+        # other `-exec`/`-ok`/`-fprint*` action primitives) write to disk or
+        # execute an arbitrary sub-command without ever tripping a redirect,
+        # pipe, chain, or substitution sign. The prefix match alone must not
+        # exempt it, or a destructive find call would sail through as
+        # read-only, keep the epoch at 0, and leave an already-collected
+        # builder receipt chain silently valid.
+        receipts = self.collect_receipts(prompt_id="find-delete-shell")
+        result = self.run_mutation(
+            "Bash",
+            prompt_id="find-delete-shell",
+            agent_type="main",
+            agent_id="main-actor",
+            tool_use_id="find-delete",
+            tool_input={"command": "find . -name '*.tmp' -delete"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.state_epoch(prompt_id="find-delete-shell"), 1)
+        self.assertTrue(self.ready(receipts, prompt_id="find-delete-shell").blocked)
+
+    def test_git_diff_with_output_flag_still_counts_as_mutation(self) -> None:
+        # Same hole, different allowlisted prefix: `git diff --output=<file>`
+        # writes the diff to disk instead of stdout, again with no
+        # redirect/pipe/chain/substitution sign for `_SHELL_WRITE_SIGNS` to
+        # catch.
+        receipts = self.collect_receipts(prompt_id="git-diff-output-shell")
+        result = self.run_mutation(
+            "Bash",
+            prompt_id="git-diff-output-shell",
+            agent_type="main",
+            agent_id="main-actor",
+            tool_use_id="git-diff-output",
+            tool_input={
+                "command": "git diff --output=/tmp/agent-kit-test-diff.txt"
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.state_epoch(prompt_id="git-diff-output-shell"), 1)
+        self.assertTrue(
+            self.ready(receipts, prompt_id="git-diff-output-shell").blocked
+        )
+
     def test_malformed_json_payload_is_nonblocking_and_does_not_invent_state(self) -> None:
         hook_path = self.harness.repo_root / "hooks" / HOOK
         for raw in ("", "{", "[]", '"text"'):

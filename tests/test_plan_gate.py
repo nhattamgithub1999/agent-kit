@@ -169,6 +169,64 @@ class PlanGateTests(unittest.TestCase):
                 allowed = self.mutation(harness, tool)
                 self.assertEqual(allowed.returncode, 0, (tool, allowed.stderr))
 
+    def test_bash_read_only_listing_is_exempt_without_an_approved_plan(self) -> None:
+        # Shares no-fake-pass.py's read-only allowlist as the single source
+        # of truth: a provably read-only `Bash` call needs no plan approval.
+        with HookHarness() as harness:
+            result = self.mutation(
+                harness, "Bash", tool_input={"command": "ls -la"}
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_bash_recursive_delete_is_still_blocked(self) -> None:
+        with HookHarness() as harness:
+            result = self.mutation(
+                harness, "Bash", tool_input={"command": "rm -rf build/"}
+            )
+            self.assertTrue(result.blocked, result.stderr)
+
+    def test_bash_read_only_prefix_with_redirect_is_still_blocked(self) -> None:
+        # An otherwise-allowlisted prefix loses the exemption the moment a
+        # write-sign character (here a redirect) appears, same as
+        # no-fake-pass.py's own `_SHELL_WRITE_SIGNS` rule.
+        with HookHarness() as harness:
+            result = self.mutation(
+                harness,
+                "Bash",
+                tool_input={
+                    "command": "git status > /tmp/agent-kit-test-out.txt"
+                },
+            )
+            self.assertTrue(result.blocked, result.stderr)
+
+    def test_bash_find_with_delete_flag_is_still_blocked(self) -> None:
+        # `find` is read-only-allowlisted, but `-delete` writes/deletes
+        # without any redirect/pipe/chain sign; the shared denylist must
+        # still catch it here exactly as it does in no-fake-pass.py.
+        with HookHarness() as harness:
+            result = self.mutation(
+                harness,
+                "Bash",
+                tool_input={"command": "find . -name '*.tmp' -delete"},
+            )
+            self.assertTrue(result.blocked, result.stderr)
+
+    def test_bash_missing_or_non_string_command_fails_closed(self) -> None:
+        with HookHarness() as harness:
+            for tool_input in ({}, {"command": 123}, {"command": ""}):
+                with self.subTest(tool_input=tool_input):
+                    result = self.mutation(harness, "Bash", tool_input=tool_input)
+                    self.assertTrue(result.blocked, result.stderr)
+
+    def test_powershell_read_only_looking_command_is_never_exempt(self) -> None:
+        # PowerShell's call operators are not covered by the write-sign regex
+        # this reuses, so it must never get the Bash read-only exemption.
+        with HookHarness() as harness:
+            result = self.mutation(
+                harness, "PowerShell", tool_input={"command": "Get-ChildItem"}
+            )
+            self.assertTrue(result.blocked, result.stderr)
+
     def test_post_exit_requires_valid_approved_response_plan(self) -> None:
         invalid_plans = (
             "",
