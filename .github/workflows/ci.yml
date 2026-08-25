@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  MINIMUM_CLAUDE_CODE_VERSION: "2.1.196"
+
+jobs:
+  behavior:
+    name: Behavior (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+        python-version:
+          - "3.9"
+          - "3.13"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run exact hook launcher smoke tests
+        run: python -m unittest tests.test_hooks_launcher -v
+      - name: Compile Python sources
+        run: python -m compileall -q hooks tests
+      - name: Run behavior tests
+        run: python -m unittest discover -s tests -p 'test_*.py' -v
+
+  strict:
+    name: Strict plugin validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+      - name: Install pinned Claude Code
+        run: npm install --global @anthropic-ai/claude-code@2.1.241
+      - name: Report Claude Code version
+        run: claude --version
+      - name: Run strict repository checks
+        run: python tests/static_check.py

@@ -1,22 +1,37 @@
 # agent-kit
 
-Plugin cho Claude Code, gồm một bộ subagent và một vòng kiểm chứng. Mục đích là
-buộc agent làm việc theo ba nguyên tắc:
+Plugin điều phối subagent cho Claude Code, với ba cổng chính: kế hoạch phải được
+duyệt trước mutation, kết quả kiểm chứng của `builder` phải có receipt có cấu
+trúc, và định nghĩa token phải khớp glossary hoặc có citation local kiểm tra
+được.
 
-- **Không bịa.** Mọi khẳng định phải có nguồn thật. Chỗ nào không tra được thì
-  phải hiện ra là chưa rõ, không được lấp cho câu văn liền mạch.
-- **Có mục tiêu.** Mỗi task phải có tiêu chí hoàn thành kiểm chứng được, và phải
-  có điều kiện dừng để không lặp vô hạn.
-- **Review lại.** Việc làm xong phải đi qua vòng verify (build, typecheck, lint,
-  test) và qua cổng phản biện.
+Phiên bản: **1.0.1**, nâng từ baseline **1.0.0**. Số hiệu này là lựa chọn có
+chủ đích của maintainer và KHÔNG phản ánh mức thay đổi — `CHANGELOG.md` có mục
+**Breaking** mà theo Semantic Versioning lẽ ra thuộc một major mới. Đọc mục
+**Breaking** và **Migration** trước khi nâng cấp.
 
-Phiên bản: **v1.0**. Profile: THOROUGH (siết chặt nhất).
+## Yêu cầu runtime
+
+- Claude Code **2.1.196 trở lên**. Plugin cần `prompt_id` và `agent_id`: mutation
+  epoch được scope theo project/session/prompt, còn receipt vẫn có owner là
+  agent đã chạy verification.
+- Python **3.9 trở lên**, có module stdlib `sqlite3` và executable tên
+  `python3` trên `PATH`. Hook config gọi trực tiếp `python3`.
+- Quyền tạo state riêng trong `${CLAUDE_PLUGIN_DATA}` hoặc `~/.claude`.
+
+Repository có workflow cấu hình kiểm tra Ubuntu, macOS và Windows trên Python
+3.9/3.13. Sau bước setup Python, mỗi job behavior chạy smoke test bằng đúng
+executable và `args` khai trong `hooks/hooks.json`, rồi mới compile và chạy full
+behavior tests. Workflow này chưa từng chạy trên GitHub trước bản 1.0.1, vì
+vậy đây là ma trận CI đã cấu hình, không phải chứng nhận tương thích trên cả ba
+hệ điều hành. Đặc biệt trên Windows, support có điều kiện: môi trường phải cung
+cấp literal `python3` trên `PATH`; plugin không alias sang `python`.
 
 ## Cài đặt
 
-Trong một phiên Claude Code:
+Trong Claude Code:
 
-```
+```text
 /plugin marketplace add nhattamgithub1999/agent-kit
 /plugin install agent-kit@agent-kit
 ```
@@ -28,289 +43,289 @@ claude plugin marketplace add nhattamgithub1999/agent-kit
 claude plugin install agent-kit@agent-kit
 ```
 
-Cài xong cần khởi động lại phiên để Claude Code nạp agent và hook.
+Khởi động lại phiên Claude Code sau khi cài hoặc nâng cấp để nạp lại agent và
+hook.
 
-## Nó giải quyết vấn đề gì
-
-Năm kiểu sai mà một agent lập trình hay mắc, và trong bộ kit này mỗi kiểu có một
-chốt chặn riêng:
-
-| Kiểu sai | Trông như thế nào | Chốt chặn |
-|---|---|---|
-| Báo cáo khống | "Đã sửa xong, test pass hết" — nhưng chưa chạy lệnh test nào | `no-fake-pass.py` chặn lượt trả về nếu không kèm output thật |
-| Nhảy vào code | Sửa file ngay từ câu đầu, chưa ai biết "xong" nghĩa là gì | `plan-gate.py` chặn lệnh ghi file khi phiên chưa có plan |
-| Lấp nghĩa viết tắt | Gặp một từ viết tắt nghiệp vụ lạ rồi tự suy nghĩa từ chữ cái đầu | `gloss-gate.py` đối chiếu chữ cái đầu và glossary đã duyệt |
-| Bỏ qua quy trình | Policy nằm trong `CLAUDE.md` ở quá xa nên lượt đầu quên mất | `session-policy.py` và `route-prompt.py` đưa policy vào đúng chỗ, đúng lúc |
-| Làm hết một mình | Main session tự grep, tự đọc, tự sửa; context loãng dần rồi bắt đầu đoán | Policy buộc delegate; năm subagent mỗi cái một việc, mỗi cái một context sạch |
-
-Điểm chung của cả năm: chúng **không** phải lời khuyên viết trong prompt. Prompt
-chỉ làm giảm xác suất. Bốn hook ở trên chặn thật bằng exit code, nên chúng là ràng
-buộc chứ không phải khuyến nghị.
-
-## Luồng chạy bên trong plugin
-
-Đây là vòng đời của một lượt làm việc. Ô có ổ khoá là hook — tức là chỗ plugin can
-thiệp thật vào runtime, không phải chỗ nhắc nhở bằng chữ.
+## Luồng thực thi 1.0.1
 
 ```mermaid
 flowchart TD
-    S([Mở phiên]) --> H1["🔒 SessionStart<br/>session-policy.py"]
-    H1 -->|"nạp policy/delegation.md vào context"| P([User gửi prompt])
-    P --> H2["🔒 UserPromptSubmit<br/>route-prompt.py"]
-    H2 -->|"gắn nhãn lớp task"| M["Main session<br/>phân loại · plan · DoD"]
-    M --> DEL{"Việc này của ai?"}
-
-    DEL -->|"tra cứu"| EX["Explore<br/>read-only"]
-    DEL -->|"thiết kế"| AR["architect<br/>đề xuất phương án"]
-    DEL -->|"phản biện"| CR["critic<br/>không có tool"]
-    AR --> VE["verifier<br/>đối chiếu codebase thật"]
-    VE -->|"BLOCK — claim không tồn tại"| M
-    VE -->|"claim có thật"| BU
-    DEL -->|"implement đã rõ phạm vi"| BU["builder"]
-
-    BU --> H3["🔒 PreToolUse<br/>plan-gate.py"]
-    H3 -->|"chưa có plan, chặn ghi file"| BU
-    H3 -->|"đã có plan"| WR["Ghi file<br/>rồi chạy skill verify-loop"]
-    WR --> H4["🔒 SubagentStop<br/>no-fake-pass.py"]
-    H4 -->|"nói đã pass mà không có output, chặn"| BU
-
-    H4 --> H5["🔒 Stop và SubagentStop<br/>gloss-gate.py"]
-    EX --> H5
-    CR --> H5
-    H5 -->|"gán nghĩa viết tắt không nguồn, chặn"| M
-    H5 --> OUT([Trả lời user])
+    S[SessionStart hoặc SubagentStart] --> P[Đưa policy vào context]
+    U[UserPromptSubmit] --> R[Phân loại task và xoá state cũ của prompt]
+    R --> PL[Plan mode: Plan 3-7 bước và DoD]
+    PL --> PRE[PreToolUse ExitPlanMode chỉ validate]
+    PRE --> POST[PostToolUse ExitPlanMode lưu approval]
+    POST --> MUT[Cho phép mutation trong đúng session và prompt]
+    MUT --> V[Builder chạy command exact từ verification.json]
+    V --> RC[Hook cấp receipt cho foreground success]
+    RC --> END[SubagentStop kiểm AGENT_KIT_RESULT_V1]
+    END --> G[Stop/SubagentStop kiểm glossary]
 ```
 
-Đọc sơ đồ theo ba tầng:
+Approval chỉ được tạo từ `PostToolUse` thành công của `ExitPlanMode`, khi
+`tool_response.plan` có đúng một section `## Plan` gồm 3–7 bước đánh số liên tục
+và đúng một section `## DoD` không rỗng. `PreToolUse ExitPlanMode` chỉ kiểm tra
+format; `EnterPlanMode`, `TodoWrite`, `EnterWorktree` và việc ghi plan file không
+tự mở gate. Approval được khóa theo cặp `(session_id, prompt_id)` và được dọn khi
+prompt mới bắt đầu hoặc session kết thúc.
 
-1. **Trước khi nghĩ.** `session-policy.py` và `route-prompt.py` bảo đảm policy và
-   nhãn phân loại có mặt trước khi agent kịp làm gì.
-2. **Trước khi sửa.** `plan-gate.py` giữ cửa ghi file. `verifier` giữ cửa vào
-   `builder`: phương án nào dựa trên hàm hoặc bảng không tồn tại thì không được
-   giao cho ai implement.
-3. **Trước khi trả lời.** `no-fake-pass.py` và `gloss-gate.py` soi nội dung lượt
-   trả về, chặn hai loại nói quá phổ biến nhất.
+Trước approval, gate chặn `Edit`, `Write`, `NotebookEdit`, `Bash`, `PowerShell`,
+`Monitor`, thao tác worktree và mọi tool khớp `mcp__.*`. Ngoại lệ duy nhất là
+`Write` vào file plan bên trong thư mục plan-mode khi đang ở permission mode
+`plan`. Ngoại lệ này dùng containment của filesystem native dưới thư mục
+`~/.claude/plans` đã canonicalize: đường dẫn Windows dạng lexical không được
+miễn trên POSIX; trên Windows, cross-drive, `..`, symlink/junction/reparse point
+và parent thiếu hoặc không kiểm chứng được đều bị từ chối. Leaf mới chỉ được
+phép khi parent thật đã tồn tại, không phải reparse point và vẫn nằm trong plan
+root đã resolve.
 
-## Bên trong có gì
+## Sáu agent
 
-| Thành phần | Nội dung |
-|---|---|
-| `agents/` | Năm subagent: `Explore` (haiku), `architect` và `critic` (opus), `builder` và `verifier` (sonnet) |
-| `hooks/` | Năm hook Python, xem bảng ở mục dưới |
-| `skills/verify-loop/` | Skill chạy vòng verify: build, typecheck, lint, test |
-| `policy/delegation.md` | Khối policy được đưa vào context mỗi phiên |
-| `VERIFICATION.template.md` | Mẫu để khai lệnh build/test của từng project |
-| `glossary.example.txt` | File mẫu cho `gloss-gate` |
-| `optional/orchestrator.md` | Bản thay thế system prompt. Không bật mặc định |
-
-### Năm subagent, mỗi cái một việc
-
-| Agent | Dùng khi | Không dùng để |
+| Agent | Trách nhiệm | Quyền chính |
 |---|---|---|
-| `Explore` | Tra cứu, tìm file, đọc hiểu hiện trạng | Sửa file, ra quyết định thiết kế |
-| `architect` | Đề xuất phương án, so sánh trade-off | Tự sửa code |
-| `builder` | Implement một thay đổi đã rõ phạm vi | Việc còn mơ hồ, hoặc cần quyết kiến trúc |
-| `verifier` | Đối chiếu từng claim với codebase thật | Phản biện logic |
-| `critic` | Phản biện độ chặt của lập luận | Sửa code |
+| `Explore` | Tìm file, đọc và mô tả hiện trạng | Read-only |
+| `architect` | Thiết kế, so sánh trade-off trước khi code | Read-only, có web |
+| `verifier` | Đối chiếu claim của plan với codebase thật | Read-only |
+| `builder` | Implement thay đổi đã có scope và DoD | Read/write/shell; không MCP, web hay spawn |
+| `reviewer` | Review code, security, regression và test coverage | Read-only |
+| `critic` | Phản biện logic của answer/plan độc lập với reasoning trace | Không dùng tool |
 
-Hai agent cuối là hai cổng chất lượng **khác nhau**, đừng dùng thay nhau.
-`verifier` trả lời câu hỏi "thứ này có tồn tại không" nên nó có tool để đọc
-codebase. `critic` trả lời câu hỏi "lập luận có chặt không" nên nó **không** có
-tool, và chỉ được xem câu hỏi gốc cùng câu trả lời chứ không xem quá trình suy
-luận — đó là điều giữ cho nó độc lập.
+`reviewer` và `critic` không thay thế nhau: review có target code/file/repository
+được route tới `reviewer`; phản biện answer, plan hoặc lập luận được route tới
+`critic`. Prompt có yêu cầu sửa vẫn được route tới `builder` sau khi scope và DoD
+đã rõ.
 
-### Năm hook, năm chốt tất định
+## Hook và wiring
 
-Prompt chỉ làm giảm xác suất agent làm sai. Hook mới là thứ chặn thật, bằng exit
-code.
+Plugin có năm executable hook và một module dùng chung:
 
-| Hook | Chạy lúc | Chặn cái gì |
+| File | Event chính | Trách nhiệm |
 |---|---|---|
-| `session-policy.py` | Mở phiên | Policy bị bỏ qua vì plugin không đọc được `CLAUDE.md` |
-| `route-prompt.py` | Người dùng gửi prompt | Lượt đầu của phiên đi thẳng vào việc, bỏ qua bước phân loại và lập plan |
-| `plan-gate.py` | Trước khi ghi file | Nhảy vào sửa code khi chưa có plan |
-| `no-fake-pass.py` | `builder` kết thúc | Báo "đã pass" mà không kèm lệnh đã chạy và output thật |
-| `gloss-gate.py` | Agent kết thúc lượt | Tự gán nghĩa cho từ viết tắt hoặc thuật ngữ nghiệp vụ |
+| `session-policy.py` | `SessionStart`, `SubagentStart` | Đưa `policy/delegation.md` vào context |
+| `route-prompt.py` | `UserPromptSubmit` | Gắn route theo task; bỏ qua acknowledgement và mask write verb bị phủ định |
+| `plan-gate.py` | `UserPromptSubmit`, tool events, `SessionEnd` | Quản lý approval theo prompt và chặn mutation chưa duyệt |
+| `no-fake-pass.py` | mutation success/failure mọi actor; `SubagentStop` của builder | Tăng project epoch, ghi verification outcome và cấp/kiểm receipt |
+| `gloss-gate.py` | `Stop`, `SubagentStop` | Kiểm định nghĩa explicit trong `last_assistant_message` |
+| `_shared.py` | Được import bởi các hook | SQLite state, normalize, citation, log/dump riêng tư |
 
-Cả năm đều **fail-open**: khi không đọc được dữ liệu đầu vào thì trả `exit 0`,
-tức là không chặn. Thà bỏ lọt còn hơn chặn oan rồi làm nghẽn phiên làm việc.
+Các hook policy, routing và glossary **fail-open** khi payload hỏng hoặc thiếu dữ
+liệu cần đọc. Glossary cũng bỏ qua ngay khi `stop_hook_active` (snake_case hoặc
+camelCase) báo hook stop đang chạy lại, tránh tự chặn đệ quy. Plan gate
+**fail-closed** cho mutation/approval đã nhận diện khi thiếu scope hoặc state an
+toàn; lifecycle cleanup vẫn fail-open. No-fake nhận `PostToolUse` và
+`PostToolUseFailure` của mọi mutation family từ mọi actor để làm stale evidence;
+chỉ builder bare hoặc `agent-kit:builder` được cấp receipt từ exact verification
+và bị kiểm `READY` ở `SubagentStop`. Lỗi contract, scope hoặc state sẽ chặn đường
+liên quan, còn payload không parse được thì fail-open. `PLAN_GATE=off` và
+`GLOSS_GATE=off` là bypass vận hành có chủ đích, không phải trạng thái an toàn
+mặc định.
 
-## Policy: đưa vào context bằng cách nào
+Routing xét write verb sau khi mask cụm phủ định gần như `không sửa`, `đừng sửa`
+hoặc `do not edit`. Một positive write clause riêng vẫn route `BUILD`; khi cùng
+clause còn chỉ dẫn read-only mâu thuẫn không thể phân giải, route là
+`AMBIGUOUS`, không tự nâng thành `BUILD`.
 
-Plugin của Claude Code **không** nạp `CLAUDE.md` đặt ở gốc plugin
-([tài liệu](https://code.claude.com/docs/en/plugins-reference)). Vì vậy khối
-policy không thể đi theo đường đó.
+## Bắt buộc: verification contract của project
 
-Thay vào đó, hook `session-policy.py` đọc file `policy/delegation.md` rồi trả nội
-dung về qua `hookSpecificOutput.additionalContext` ở event `SessionStart`. Muốn
-sửa policy thì sửa đúng file đó, vì không có bản copy nào khác trong repo.
+Tạo `<project>/.claude/verification.json`. Nếu file đã tồn tại, phải parse và
+merge schema hiện có; không append thêm JSON object và không overwrite mù command
+riêng của project. Chạy lại cùng thao tác cấu hình với cùng input phải giữ nguyên
+nội dung ngữ nghĩa. Gặp schema lạ hoặc conflict thì dừng để xác nhận.
 
-Tài liệu chính thức không nói rõ `SessionStart` có nhận `additionalContext` hay
-không, nên điều này đã được kiểm bằng thực nghiệm có đối chứng: đặt một chuỗi
-canary chỉ tồn tại trong file policy, rồi so sánh phiên có bật hook với phiên
-`POLICY_HOOK=off`. Phiên bật hook đọc được canary, phiên tắt hook thì không.
+Contract hiện tại của chính repository (đồng bộ với
+`.claude/verification.json`):
 
-## Một bước bắt buộc cho từng project
+```json
+{
+  "version": 1,
+  "steps": {
+    "build": {
+      "command": "python3 -m compileall -q hooks tests",
+      "cwd": "."
+    },
+    "typecheck": null,
+    "lint": {
+      "command": "python3 tests/static_check.py",
+      "cwd": "."
+    },
+    "test": {
+      "command": "python3 -m unittest discover -s tests -p 'test_*.py' -v",
+      "cwd": "."
+    }
+  },
+  "n_a_reasons": {
+    "typecheck": "N/A: Python stdlib project chưa dùng static type checker"
+  }
+}
+```
+
+Contract phải có đúng ba field root `version`, `steps`, `n_a_reasons` và đúng
+bốn step `build`, `typecheck`, `lint`, `test`. Step active có đúng `command` và
+`cwd`; `cwd` phải resolve vào directory bên trong project. Mỗi cặp command/cwd
+phải duy nhất. Step N/A dùng `null`, đồng thời có đúng một lý do không rỗng bắt
+đầu bằng `N/A:` trong `n_a_reasons`. Không đổi step đang lỗi thành N/A.
+
+Runtime hook và `tests/static_check.py` cùng gọi pure validator trong
+`hooks/_shared.py`, nên verdict schema không được duy trì bằng hai bộ rule khác
+nhau. Validator sắp step active theo thứ tự cố định
+`build` → `typecheck` → `lint` → `test`, bỏ qua step N/A. Với contract của
+repository này, chain thực tế là `build` → `lint` → `test`.
+
+Builder chỉ nhận receipt khi command và cwd khớp chính xác contract hiện tại,
+chạy foreground, không bị interrupt và hook nhận `PostToolUse`. Mỗi record gắn
+với fingerprint của toàn contract hiện tại cùng exact command/cwd. Chạy lại một
+step sẽ vô hiệu chính step đó và mọi step downstream; phải chạy tiếp phần còn lại
+đúng thứ tự. Verification failure hoặc interrupted làm tăng epoch và xoá live
+chain.
+
+Verification chạy background không được cấp receipt và taint toàn prompt, kể cả
+khi sau đó chạy lại đủ chain. Sau khi chờ background hoàn tất hoặc cancel nó,
+phải gửi prompt mới rồi chạy lại chain; cùng prompt không thể báo `READY`.
+Receipt được đưa vào context theo format:
+
+```text
+AGENT_KIT_RECEIPT_V1={"epoch":0,"receipt":"<opaque-value>","step":"build"}
+```
+
+Mutation epoch được khóa theo hash của canonical project path cùng session và
+prompt; actor không nằm trong khóa epoch. Vì vậy mutation thành công hoặc thất
+bại từ main, agent khác, shell, worktree hay MCP trong cùng project/session/prompt
+đều làm receipt cũ stale. Receipt vẫn được bind với owner agent, nên builder khác
+không thể dùng lại. Ngoài ra receipt còn bind với step, exact command/cwd,
+verification contract và epoch; khác bất kỳ scope/fact nào trong số đó đều không
+hợp lệ. Prose, output paste lại và code fence không được coi là evidence.
+
+Builder phải kết thúc bằng đúng một dòng không nằm trong code fence. Khi đủ mọi
+step active:
+
+```text
+AGENT_KIT_RESULT_V1={"status":"READY","receipts":{"build":"<receipt>","lint":"<receipt>","test":"<receipt>"}}
+```
+
+Khi chưa đạt:
+
+```text
+AGENT_KIT_RESULT_V1={"status":"NOT_READY","reason":"<lý do cụ thể>"}
+```
+
+Object `receipts` phải chứa đúng các step active; step N/A không xuất hiện.
+
+## Glossary
+
+Glossary người dùng ở `~/.claude/glossary.txt` là nguồn ưu tiên. Glossary project
+ở `<project>/.claude/glossary.txt` chỉ được thêm token mới; nếu định nghĩa lại
+token home với nghĩa khác, hook báo conflict.
+
+Để khởi tạo mà không ghi đè file đã có, chạy từ root source repository:
 
 ```bash
-cat VERIFICATION.template.md >> <project>/.claude/CLAUDE.md
+mkdir -p ~/.claude
+test -e ~/.claude/glossary.txt || cp glossary.example.txt ~/.claude/glossary.txt
 ```
 
-Sau đó điền lệnh build, typecheck, lint và test **thật** của project đó. Bỏ bước
-này thì agent phải tự suy đoán lệnh, và như vậy là mất luôn nguyên tắc không bịa.
+Mỗi entry có dạng `TOKEN = nghĩa đã xác nhận`. Hook so sánh exact sau khi Unicode
+NFC, case-fold và gộp whitespace; không bỏ dấu và không suy nghĩa từ chữ cái đầu.
+Một định nghĩa chưa có trong glossary chỉ hợp lệ khi citation local `path:line`
+resolve bên trong project và chính dòng đó chứa cả token lẫn nghĩa. Nếu chưa có
+nguồn, giữ nguyên token và viết `[CHƯA RÕ: <token>]`.
 
-## Glossary — nên làm ngay
+## State, security và privacy
 
-```bash
-cp glossary.example.txt ~/.claude/glossary.txt
-```
+State mặc định nằm tại `${CLAUDE_PLUGIN_DATA}/agent-kit`; nếu runtime không cấp
+biến đó, fallback là `~/.claude/agent-kit`. SQLite dùng transaction và WAL để
+đồng bộ approval, project-scoped mutation epoch và verification record.
 
-Rồi điền dần vào đó, mỗi dòng một cặp `VIẾTTẮT = nghĩa chính thức`.
+Internal schema hiện là v2. Khi mở database v1, migration chạy trong cùng
+transaction: giữ `plan_approvals`, nhưng xoá và tạo lại mutation/verification
+tables để receipt và mutation state v1 không thể được tái sử dụng. Nếu migration
+lỗi, transaction rollback về v1 thay vì để database nửa cũ nửa mới.
 
-Với những token có trong file này, `gloss-gate` đối chiếu trực tiếp nghĩa mà
-agent viết ra với nghĩa chính thức bạn đã khai. Mâu thuẫn là chặn ngay, không cần
-suy luận gì thêm. Đây là tín hiệu mạnh nhất mà hook có.
+Persistent state chỉ lưu hash domain-separated thay cho runtime ID, plan,
+project/file path, command, cwd và receipt; raw IDs, paths, commands, receipts
+hay secrets không được persist. Log có giới hạn kích thước và redact field nhạy
+cảm. `DUMP` chỉ nên bật khi debug: snapshot được redact, giới hạn kích thước và
+giữ tối đa một backup, nhưng vẫn là dữ liệu chẩn đoán cần bảo vệ.
 
-Chỉ thêm một dòng khi bạn **đã xác nhận** nghĩa của nó. Một dòng sai ở đây sẽ hợp
-thức hoá đúng loại lỗi mà file này sinh ra để chặn.
+Trên POSIX, thư mục state được ép mode `0700`, file state/log/dump `0600`; symlink
+và file thuộc user khác bị từ chối. Trên nền tảng không có POSIX ownership/mode,
+plugin không tuyên bố cung cấp cùng mức bảo vệ permission. Nếu `sqlite3` thiếu
+hoặc state path không an toàn/không truy cập được, mutation và báo cáo `READY`
+fail-closed.
 
-## Điều chỉnh bằng biến môi trường
-
-Plugin không có cách khai báo biến môi trường
-([tài liệu](https://code.claude.com/docs/en/plugins-reference)), nên các hook dùng
-giá trị mặc định của profile THOROUGH. Muốn đổi thì `export` trong shell trước khi
-chạy `claude`.
+## Biến môi trường đang hỗ trợ
 
 | Biến | Mặc định | Tác dụng |
-|---|---|---|
-| `ROUTE_MIN_CHARS` | 12 | Prompt ngắn hơn ngưỡng này thì không phân loại |
-| `PLAN_GATE_FREE_EDITS` | 0 | Số lần ghi file được miễn trước khi gate bắt đầu chặn |
-| `PLAN_GATE` | — | Đặt `off` để tắt plan gate |
-| `PLAN_GATE_PLAN_TOOLS` | — | Thêm tool được tính là "đã có plan", cách nhau bằng dấu phẩy |
-| `NOFAKEPASS_AGENTS` | `builder` | Agent nào bị soi khi khẳng định "đã pass" |
-| `NOFAKEPASS_STRICT` | — | Đặt `1` để chặn cả khi không nhận diện được agent nào đang chạy |
-| `GLOSS_GATE` | `block` | `warn` là chỉ ghi log, `off` là tắt hẳn |
-| `GLOSS_MIN_LEN` | 3 | Độ dài tối thiểu của viết tắt mới bị soi |
-| `POLICY_HOOK` | — | Đặt `off` để không đưa policy vào context |
-| `POLICY_FILE` | — | Trỏ tới file policy khác |
+|---|---:|---|
+| `ROUTE_MIN_CHARS` | `12` | Ngưỡng 0–4096; prompt ngắn hơn không được route |
+| `PLAN_GATE` | bật | `off` tắt plan gate |
+| `GLOSS_GATE` | `block` | `warn` chỉ log, `off` tắt gate |
+| `GLOSS_MIN_LEN` | `3` | Độ dài token tối thiểu, được clamp 2–32 |
+| `POLICY_HOOK` | bật | `off` tắt policy injection |
+| `POLICY_FILE` | policy của plugin | Trỏ tới file policy UTF-8 khác |
+| `DUMP` | tắt | Giá trị không rỗng bật diagnostic dump đã redact |
+| `CLAUDE_PLUGIN_DATA` | fallback home | Root state do Claude Code cấp |
+| `AGENT_KIT_SQLITE_BUSY_TIMEOUT_MS` | `250` | SQLite busy timeout, clamp 50–1000 ms |
+| `AGENT_KIT_LOG_MAX_BYTES` | `262144` | Giới hạn log, clamp 4096–4194304 byte |
+| `AGENT_KIT_DUMP_MAX_BYTES` | `262144` | Giới hạn dump, clamp 4096–4194304 byte |
 
-## Hiệu quả: đo được gì, chưa đo được gì
+`CLAUDE_PLUGIN_ROOT` và `CLAUDE_PROJECT_DIR` là context path mà Claude Code/hook
+dùng để tìm plugin hoặc project; chúng không phải feature toggle. Giá trị số sai
+format được đưa về mặc định và clamp thay vì làm hook crash.
 
-Phần này viết theo đúng nguyên tắc mà bộ kit đòi ở agent — số nào có thì nói, số
-nào chưa có thì nói là chưa có.
+## Tự kiểm repository
 
-### Đo được, và bạn tự chạy lại được ngay
-
-| Chạy cái này | Ra cái này | Nó chứng minh gì |
-|---|---|---|
-| `claude plugin validate . --strict` | Validation passed, không warning | Manifest, hook config và frontmatter của cả 5 agent đều đúng schema |
-
-Đó là lệnh duy nhất bạn kiểm lại được từ bản phát hành này.
-
-### Đo được, nhưng bạn phải tin tôi
-
-Hai số dưới đây đo bằng `kit-selfcheck.py`, script kiểm cấu hình nội bộ **không
-đóng gói kèm plugin**:
-
-| Số đo nội bộ | Kết quả | Nó chứng minh gì |
-|---|---|---|
-| 145 check ngữ nghĩa cấu hình | PASS 145, FAIL 0 | 145 ràng buộc về **giá trị** cấu hình đang đúng: model tier từng agent, ngưỡng số, tool nào bị cấm, và tính nhất quán chéo giữa các file |
-| Đối chứng âm: tiêm 30 defect | Bắt 30/30 | Validator bị tiêm 30 lỗi thật rồi phải bắt đủ 30 — nó không phải loại luôn báo pass |
-
-Số thứ hai đáng tin hơn số thứ nhất, vì một validator luôn nói "ổn" thì vô dụng,
-mà chỉ có đối chứng âm mới phân biệt được hai loại đó.
-
-Nhưng cả hai đều là số **tôi báo lại**, không phải số bạn kiểm lại được từ repo
-này. Hãy đọc chúng đúng ở mức đó. Bản ghi đo nội bộ trước khi đóng gói ở mức 141
-check và 28/28 defect; con số hiện tại cao hơn vì mỗi lỗi tìm được trong quá trình
-đóng gói thành plugin đều được thêm một check để nó không tái diễn. Bản ghi đó giữ
-nguyên số cũ — sửa số trong một bản ghi đo là đúng loại việc mà bộ kit này tồn tại
-để chặn.
-
-### Gate có bắn thật không — sổ ghi từ chính lúc làm repo này
-
-Bốn lần bị chặn thật, tất cả đều nằm trong git log:
-
-| Bị chặn ở đâu | Đúng hay oan | Xử lý |
-|---|---|---|
-| `plan-gate` chặn lệnh ghi file khi phiên chưa có plan | Đúng | Không nới gate. Ba đường thoát nó nêu ra đều dùng được |
-| `gloss-gate` chặn vì token có gạch nối bị tách sai | Oan | Sửa: dấu gạch nối phải có khoảng trắng hai bên |
-| `gloss-gate` chặn chính dòng phân loại mà policy bắt buộc phải in | Oan, và là tự mâu thuẫn | Sửa: thêm danh sách từ vựng của chính kit vào diện bỏ qua |
-| `gloss-gate` chặn vì toán tử so sánh bị coi là dấu gán nghĩa | Oan | Sửa: dấu gán phải đứng độc lập, không phải phần của `==`, `=>`, `!=` |
-
-Ba lần oan đều đã thành fix kèm test hồi quy. Điều này nói lên hai chuyện: gate
-thật sự cắn, kể cả cắn người viết ra nó; và mỗi lần cắn oan đều bị siết lại chứ
-không bị nới ra cho dễ chịu.
-
-### Chưa đo được — và tại sao chưa
-
-Bản ghi đo nội bộ khai thẳng những chỉ số **chưa có số**: tỉ lệ bịa, tỉ lệ defect
-lọt lưới, tỉ lệ có plan, tỉ lệ delegate, tổng chi phí, và tỉ lệ chặn oan trên task
-nhỏ. Lý do ghi trong đó: không có baseline thì con số đo sau vô nghĩa.
-
-Vì vậy đừng đọc bộ kit này như một thứ đã được chứng minh làm giảm tỉ lệ bịa bao
-nhiêu phần trăm. Cái đo được là **cấu hình đúng như thiết kế** và **cơ chế chặn có
-hoạt động**. Cái chưa đo được là **kết quả cuối trên việc thật**.
-
-Bản ghi đó còn nói rõ một điều mà tài liệu quảng cáo thường bỏ qua: khi so hai
-phiên bản mà chỉ có số đo tĩnh, kết luận duy nhất rút ra được là bản mới **đắt
-hơn**, chứ không phải tốt hơn.
-
-### Chi phí đã biết
-
-| Khoản | Lượng | Ghi chú |
-|---|---|---|
-| Khối policy | 73 dòng, 3.886 ký tự, một lần mỗi phiên | Vào context ở `SessionStart`, không phải mỗi lượt |
-| Nhãn phân loại | Khoảng 60–130 token mỗi lượt | Theo ghi chú trong `hooks/route-prompt.py` |
-| Bốn hook chặn | Không tốn token | Chúng chỉ đọc payload và trả exit code |
-
-Quy đổi ký tự sang token dùng ước lượng 3,5 ký tự một token cho văn bản Việt–Anh
-trộn. Đó là **ước lượng**, không phải đo bằng tokenizer thật: con số ký tự là đếm
-được, con số token thì không.
-
-## Những giới hạn đã biết
-
-**`gloss-gate` chặn cả việc viết *về* chuyện gán nghĩa sai.** Nếu tài liệu, test
-hay báo cáo của bạn trích nguyên một cặp viết-tắt kèm nghĩa sai để làm ví dụ, hook
-vẫn chặn, vì nó không phân biệt được "đang khẳng định" với "đang trích dẫn". Đây
-là lựa chọn có ý thức: cách sửa tự nhiên nhất là miễn trừ nội dung trong backtick,
-nhưng làm vậy thì chỉ cần bọc backtick là lách được gate. Khi cần viết loại nội
-dung đó, dùng `GLOSS_GATE=warn` cho lượt đó.
-
-**`no-fake-pass` chỉ nhận bằng chứng ở ba dạng:** block code, dòng bắt đầu bằng
-`$ <lệnh>`, hoặc câu ghi rõ `CHƯA VERIFY`. Nhắc tên lệnh bằng inline backtick
-không được tính là bằng chứng.
-
-**Policy có tới được subagent hay không thì CHƯA VERIFY.** Hook chạy ở
-`SessionStart`, và điều đã kiểm được là nó tới được phiên chính. Subagent là một
-context riêng, nên rất có thể nó không nhận khối policy này — khác với bản cài thủ
-công, nơi `CLAUDE.md` tới được mọi agent. Bù lại, các luật cốt lõi đã được viết
-thẳng vào từng file trong `agents/`, nên subagent không đi làm mà tay trắng. Dù
-vậy đây vẫn là điều chưa đo, không phải điều đã bảo đảm.
-
-**Mọi số đo của kit đều là kiểm tĩnh.** Chúng đo cấu hình có đúng hay không, chứ
-không đo được agent có thật sự ngừng bịa hay không.
-
-## Tự kiểm
+Chạy từ root:
 
 ```bash
-claude plugin validate . --strict   # manifest và component của plugin
+python3 -m compileall -q hooks tests
+python3 tests/static_check.py
+python3 -m unittest discover -s tests -p 'test_*.py' -v
+claude plugin validate . --strict
+claude plugin validate .claude-plugin/plugin.json --strict
+claude plugin validate agents --strict
+claude plugin validate skills --strict
 ```
 
-Bộ kiểm ngữ nghĩa 145 check và đối chứng âm 30 defect là công cụ nội bộ, không
-phát hành kèm plugin. Kết quả của chúng ghi ở mục Hiệu quả bên trên.
+Project hiện không cấu hình static type checker; step `typecheck` được khai N/A
+có lý do trong `.claude/verification.json`. `tests/static_check.py` kiểm syntax,
+JSON, file `.pyc` bị track nhầm, đồng bộ tên và version giữa hai manifest, gọi
+cùng verification validator với runtime, và chạy bốn strict validation ở trên;
+lệnh direct vẫn được liệt kê để dễ chẩn đoán từng validator. Nó KHÔNG kiểm
+author hay release contract — hai thứ đó nằm ở `tests/test_release_contract.py`,
+chỉ chạy ở job `behavior`, không chạy ở job strict validation.
+
+Workflow `.github/workflows/ci.yml` cấu hình exact launcher smoke trước full
+behavior tests trên ba hệ điều hành, cùng strict validation trên Ubuntu với
+Claude Code được pin. Đây chỉ là cấu hình trong repository; CI remote cho 1.0.1
+**CHƯA VERIFY**.
+
+## Giới hạn đã biết
+
+- Gate là kiểm soát protocol và contract, không phải chứng minh định lượng rằng
+  agent giảm hallucination, defect hay chi phí trên workload thực. Các outcome
+  đó chưa được đo.
+- Malformed payload có thể fail-open ở policy, routing, glossary và ở điểm vào
+  chưa xác định được event của các hook khác.
+- Receipt dựa trên foreground `PostToolUse`; plugin không coi transcript, prose
+  hay output được paste lại là bằng chứng thực thi.
+- Exact command/cwd giúp tránh nhận nhầm evidence nhưng yêu cầu project giữ
+  verification contract đồng bộ khi đổi script hoặc working directory.
+- Glossary chỉ kiểm định nghĩa explicit mà parser nhận diện; nó không phải bộ
+  phân tích ngữ nghĩa tổng quát.
+- CI đa nền tảng mới được cấu hình, chưa có remote run để xác nhận toàn bộ ma
+  trận. Performance và tác động chất lượng end-to-end cũng chưa có số đo.
 
 ## Đóng góp
 
-`main` là branch được bảo vệ, mọi thay đổi đi qua pull request. Trước khi mở PR,
-chạy lệnh ở mục Tự kiểm và dán output vào phần mô tả.
+`main` là branch được bảo vệ; thay đổi đi qua pull request. Trước khi mở PR, chạy
+toàn bộ lệnh ở mục Tự kiểm và đính kèm output thật hoặc ghi rõ `CHƯA VERIFY` cho
+lệnh chưa chạy được.
 
 ## Tác giả
 
-Phát triển tại **Phòng ISCSU2**. Người phát triển: **TamBN3** — tambn3@fpt.com.
-
-Báo lỗi hoặc góp ý thì mở issue trên repo, kèm output của lệnh ở mục Tự kiểm.
+Phát triển tại **Phòng ISCSU2**. Người phát triển: **TamBN3** —
+**tambn3@fpt.com**.
 
 ## Giấy phép
 
-MIT. Xem file `LICENSE`.
+MIT. Xem `LICENSE`.

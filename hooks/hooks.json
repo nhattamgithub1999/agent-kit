@@ -5,7 +5,24 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/session-policy.py",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/session-policy.py"
+            ],
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/session-policy.py"
+            ],
             "timeout": 5
           }
         ]
@@ -16,31 +33,91 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/route-prompt.py",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/route-prompt.py"
+            ],
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/plan-gate.py"
+            ],
+            "timeout": 6
           }
         ]
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|NotebookEdit|TodoWrite|ExitPlanMode|EnterPlanMode|EnterWorktree",
+        "matcher": "Edit|Write|NotebookEdit|Bash|PowerShell|Monitor|EnterWorktree|ExitWorktree|ExitPlanMode|mcp__.*",
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/plan-gate.py",
-            "timeout": 5
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/plan-gate.py"
+            ],
+            "timeout": 6
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/plan-gate.py"
+            ],
+            "timeout": 6
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit|Bash|PowerShell|Monitor|EnterWorktree|ExitWorktree|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/no-fake-pass.py"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Edit|Write|NotebookEdit|Bash|PowerShell|Monitor|EnterWorktree|ExitWorktree|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/no-fake-pass.py"
+            ],
+            "timeout": 10
           }
         ]
       }
     ],
     "SubagentStop": [
       {
-        "matcher": "^builder$",
+        "matcher": "^(?:agent-kit:)?builder$",
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/no-fake-pass.py",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/no-fake-pass.py"
+            ],
             "timeout": 10
           }
         ]
@@ -49,7 +126,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/gloss-gate.py",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/gloss-gate.py"
+            ],
             "timeout": 10
           }
         ]
@@ -60,8 +140,33 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/gloss-gate.py",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/no-fake-pass.py"
+            ],
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/gloss-gate.py"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/plan-gate.py"
+            ],
+            "timeout": 6
           }
         ]
       }
