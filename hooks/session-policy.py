@@ -1,87 +1,113 @@
 #!/usr/bin/env python3
+"""Inject the canonical delegation policy into a Claude Code hook context.
+
+The hook is intentionally stateless: every configured lifecycle invocation
+reads the policy and emits one JSON response. A missing or malformed payload,
+an unreadable policy, or invalid UTF-8 fails open without writing state or
+printing diagnostics into the hook protocol stream.
+
+Environment overrides:
+  POLICY_HOOK=off     disable policy injection
+  POLICY_FILE=<path>  read an alternate policy file (``~`` is expanded)
 """
-Inject khối policy (Bước 0 / delegation / no-fabrication) vào context.
 
-VẤN ĐỀ NÓ GIẢI:
-  Plugin KHÔNG load được CLAUDE.md — "A CLAUDE.md file at the plugin root is NOT
-  loaded as project context" (https://code.claude.com/docs/en/plugins-reference).
-  Bản cài thủ công dựa vào việc append policy vào ~/.claude/CLAUDE.md. Là plugin
-  thì phải tự inject, nếu không kit mất trụ "có mục tiêu" ngay từ lượt đầu.
-
-NGUỒN POLICY: <plugin root>/policy/delegation.md — nguồn DUY NHẤT, không copy.
-
-CHẠY ĐƯỢC Ở CẢ HAI EVENT:
-  SessionStart      -> inject 1 lần/phiên (rẻ nhất)
-  UserPromptSubmit  -> inject ở prompt ĐẦU TIÊN của phiên, các lượt sau bỏ qua
-                       (state theo session_id ở tmp), tránh trả token mỗi lượt.
-  `hookEventName` lấy TỪ PAYLOAD, không hard-code, nên gắn event nào cũng đúng.
-
-CHỈNH:
-  POLICY_HOOK=off          tắt hẳn
-  POLICY_FILE=<path>       dùng file policy khác
-
-FAIL-OPEN: không đọc được policy hoặc payload -> exit 0, không chặn gì.
-"""
 import json
 import os
 import pathlib
 import sys
-import tempfile
-
-STATE = pathlib.Path(tempfile.gettempdir()) / "claude-policy-injected"
+from typing import Any, Dict, Optional
 
 
-def policy_path() -> pathlib.Path:
-    env = os.environ.get("POLICY_FILE")
-    if env:
-        return pathlib.Path(env).expanduser()
-    root = os.environ.get("CLAUDE_PLUGIN_ROOT")
-    base = pathlib.Path(root) if root else pathlib.Path(__file__).resolve().parent.parent
-    return base / "policy" / "delegation.md"
+# Policy text is normally only a few KiB. Refuse unexpectedly large files
+# rather than flooding Claude Code's context or injecting a truncated policy.
+MAX_POLICY_BYTES = 128 * 1024
 
 
-def already_done(session: str) -> bool:
-    """Chỉ dùng cho event lặp lại nhiều lần trong 1 phiên."""
-    if not session:
-        return False
+def policy_path() -> Optional[pathlib.Path]:
+    """Return the policy path without using the process cwd by default."""
+
+    override = os.environ.get("POLICY_FILE")
+    if override:
+        try:
+            return pathlib.Path(override).expanduser()
+        except (OSError, RuntimeError):
+            return None
+
+    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if plugin_root:
+        try:
+            root = pathlib.Path(plugin_root).expanduser()
+        except (OSError, RuntimeError):
+            return None
+        # Claude Code supplies an absolute root. Reject a malformed relative
+        # value so the default never silently depends on cwd.
+        if not root.is_absolute():
+            return None
+    else:
+        root = pathlib.Path(__file__).resolve().parent.parent
+
+    return root / "policy" / "delegation.md"
+
+
+def read_payload() -> Optional[Dict[str, Any]]:
+    """Read one JSON object from stdin, returning ``None`` on protocol errors."""
+
     try:
-        STATE.mkdir(parents=True, exist_ok=True)
-        marker = STATE / session.replace("/", "_")[:120]
-        if marker.exists():
-            return True
-        marker.touch()
+        raw = sys.stdin.read()
+        payload = json.loads(raw)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def read_policy(path: pathlib.Path) -> Optional[str]:
+    """Read a non-empty, strictly UTF-8 policy within ``MAX_POLICY_BYTES``."""
+
+    try:
+        with path.open("rb") as policy_file:
+            raw = policy_file.read(MAX_POLICY_BYTES + 1)
     except OSError:
-        return False
-    return False
+        return None
+    if len(raw) > MAX_POLICY_BYTES:
+        return None
+    try:
+        text = raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return None
+    return text or None
 
 
 def main() -> int:
-    if os.environ.get("POLICY_HOOK", "").lower() == "off":
-        return 0
-    try:
-        payload = json.loads(sys.stdin.read())
-    except (json.JSONDecodeError, ValueError):
-        return 0
-    if not isinstance(payload, dict):
+    if os.environ.get("POLICY_HOOK", "").strip().casefold() == "off":
         return 0
 
-    event = payload.get("hook_event_name") or payload.get("hookEventName") or "SessionStart"
-    if event != "SessionStart" and already_done(str(payload.get("session_id") or "")):
+    payload = read_payload()
+    if payload is None:
         return 0
 
-    try:
-        text = policy_path().read_text(encoding="utf-8").strip()
-    except OSError:
-        return 0
-    if not text:
+    event = payload.get("hook_event_name") or payload.get("hookEventName")
+    if not isinstance(event, str) or not event.strip():
         return 0
 
-    print(json.dumps({
+    path = policy_path()
+    if path is None:
+        return 0
+    text = read_policy(path)
+    if text is None:
+        return 0
+
+    output = {
         "hookSpecificOutput": {
             "hookEventName": event,
             "additionalContext": text,
         }
-    }, ensure_ascii=False))
+    }
+    try:
+        print(json.dumps(output, ensure_ascii=False))
+    except (BrokenPipeError, OSError, UnicodeError):
+        return 0
     return 0
 
 

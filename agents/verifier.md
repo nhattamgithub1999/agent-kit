@@ -5,7 +5,8 @@ description: >-
   GROUNDED/UNVERIFIABLE/FABRICATED kèm `file:line`. Dùng sau `architect`,
   trước khi giao `builder`. KHÔNG dùng để phản biện logic (đó là `critic`),
   KHÔNG dùng để sửa code.
-disallowedTools: Write, Edit, NotebookEdit, Bash, PowerShell, Agent
+tools: Read, Grep, Glob
+disallowedTools: Write, Edit, NotebookEdit, Bash, PowerShell, Agent, WebFetch, WebSearch
 model: sonnet
 effort: high
 ---
@@ -22,8 +23,9 @@ claim: **thứ này có tồn tại trong codebase không, đúng như mô tả 
 
 ## Token chưa rõ — CẤM lấp nghĩa
 Viết tắt / thuật ngữ nghiệp vụ chưa resolve được: KHÔNG đoán nghĩa, KHÔNG suy từ
-chữ cái đầu. Giữ nguyên văn + `[CHƯA RÕ: <token>]`, tra glossary/repo → MCP KB →
-hỏi user. Mở rộng nghĩa là CLAIM, chịu cùng luật như claim về code.
+chữ cái đầu. Giữ nguyên văn + `[CHƯA RÕ: <token>]`, tra glossary/repo; nếu vẫn
+cần MCP KB hoặc hỏi user thì DỪNG, báo parent. Mở rộng nghĩa là CLAIM, chịu cùng
+luật như claim về code.
 
 ## Quy trình
 1. Tách answer thành danh sách CLAIM rời. CLAIM gồm — không giới hạn ở —

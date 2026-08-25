@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "steps": {
+    "build": {
+      "command": "python3 -m compileall -q hooks tests",
+      "cwd": "."
+    },
+    "typecheck": null,
+    "lint": {
+      "command": "python3 tests/static_check.py",
+      "cwd": "."
+    },
+    "test": {
+      "command": "python3 -m unittest discover -s tests -p 'test_*.py' -v",
+      "cwd": "."
+    }
+  },
+  "n_a_reasons": {
+    "typecheck": "N/A: Python stdlib project chưa dùng static type checker"
+  }
+}

@@ -16,9 +16,17 @@ Cấm tự chấm "đủ ngữ cảnh" / "chi phí spawn > lợi ích" để b�
 
 ## Delegation
 - Tra cứu/khám phá → `Explore` (haiku). Kiến trúc/plan → `architect` (opus).
-- Implement phạm vi rõ → `builder` (sonnet). Phản biện → `critic` (opus).
+- Implement phạm vi rõ, hoặc review kèm yêu cầu sửa → `builder` (sonnet).
+- Review code/file/repository/security/regression/test coverage, không sửa →
+  `reviewer` (sonnet, read-only).
+- Phản biện logic của answer/plan/reasoning → `critic` (opus, `maxTurns: 1`).
 - Đối chiếu claim với codebase thật → `verifier` (sonnet).
 - Song song 3–5 subagent read-only độc lập.
+
+Không định tuyến review code sang `critic`: `reviewer` đọc codebase thật để tìm
+finding; `critic` chỉ phản biện logic nội tại và không dùng tool. Prompt review
+có cả yêu cầu sửa phải đi qua luồng implement và giao `builder` sau các cổng
+kiến trúc/verifier cần thiết.
 
 ## No-fabrication (mọi agent)
 1. Khẳng định về code kèm `file:line` đã thực sự đọc.
@@ -46,7 +54,32 @@ núm chi phí.
 - Task giao builder PHẢI có DoD là outcome kiểm chứng được. Không có → DỪNG, hỏi.
 - ATTEMPT CAP = 3 mỗi bước verify. Chạm trần → dừng, báo trạng thái thật.
 - Cascading failure (sửa A phá B): chạm cap thì dừng, không lặp.
-- Lệnh build/typecheck/lint/test: khai báo ở `<project>/.claude/CLAUDE.md` theo `~/.claude/VERIFICATION.template.md`. Chưa khai báo → HỎI, không đoán lệnh.
+- Nguồn DUY NHẤT của lệnh build/typecheck/lint/test là
+  `<project>/.claude/verification.json`: `version: 1`, đúng bốn step `build`,
+  `typecheck`, `lint`, `test`. Step chạy được khai báo exact `command` + `cwd`;
+  step `null` là N/A và phải có lý do không rỗng bắt đầu `N/A:` trong
+  `n_a_reasons`. Thiếu/sai contract → DỪNG, trả `NOT_READY`, KHÔNG đoán lệnh.
+
+## Builder verification result
+- Sau mỗi command foreground khớp exact step/cwd và thành công, hook cấp receipt
+  gắn với session + prompt + builder + mutation epoch. Output/prose/code fence
+  không phải evidence; mutation sau đó làm receipt cũ stale.
+- Final của builder luôn kết thúc bằng đúng một dòng, không bọc code fence:
+  `AGENT_KIT_RESULT_V1=<compact JSON>`.
+- `READY` phải có object `receipts` chứa receipt hợp lệ cho mọi step non-N/A.
+  `NOT_READY` phải có `reason` không rỗng. Thiếu receipt, receipt stale/cross-scope,
+  contract lỗi hoặc không chạy được command → `NOT_READY`; không được báo pass.
+- Builder chỉ dùng allowlist `Read`, `Grep`, `Glob`, `Write`, `Edit`, `Bash`,
+  `PowerShell`; không kế thừa MCP. Nếu cần MCP/KB, builder DỪNG và chuyển exact
+  nhu cầu cho parent thực hiện hoặc giao agent có quyền phù hợp.
+
+## Approval/resume cho builder
+- Khi trigger escalation, builder trả exact path, lý do và trạng thái thật rồi
+  DỪNG. Parent chỉ resume bằng approval nêu exact path/phạm vi được duyệt.
+- Với file nhạy cảm hoặc public contract, approval phải xác nhận `architect` đã
+  duyệt phương án và `verifier` đã fact-check claim trước khi resume.
+- Approval không nới ATTEMPT CAP, không mở path ngoài scope, không cho đoán lệnh,
+  không bỏ cổng chất lượng hoặc verification.
 
 ## Escalation — subagent KHÔNG tự spawn subagent
 Không agent nào có tool `Agent`. Cần năng lực cao hơn → DỪNG, trả về parent kèm
@@ -58,7 +91,7 @@ lý do. Parent quyết định gọi tiếp.
   Cũng chạy khi PROMPT CỦA USER dẫn ra hàm/bảng/config cụ thể — đó là claim,
   không phải sự thật.
 - `critic` hỏi "lập luận CÓ CHẶT không" → không tool, chỉ thấy câu hỏi + answer.
-  TỐI ĐA 2 vòng. KHÔNG paste reasoning/trace.
+  `maxTurns: 1`, đúng một vòng. KHÔNG paste reasoning/trace.
 Chỉ bật cho quyết định/plan quan trọng.
 
 ## Ask-loop
