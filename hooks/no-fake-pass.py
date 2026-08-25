@@ -32,6 +32,13 @@ from _shared import (
 
 
 BUILDER_AGENTS = frozenset(("builder", "agent-kit:builder"))
+# Per Claude Code's documented hook payload design, ``agent_id`` is populated
+# only inside a subagent invocation; it is intentionally absent for
+# main-session events (PostToolUse/Stop fired directly on the user's turn).
+# This sentinel stands in for "the main session" so non-builder actors get a
+# stable, non-empty identity to scope mutation/receipt state by, instead of
+# being fail-closed for a field that was never supposed to exist for them.
+MAIN_SESSION_ACTOR = "agent-kit:main-session"
 SHELL_TOOLS = frozenset(("Bash", "PowerShell"))
 DIRECT_MUTATION_TOOLS = frozenset(
     ("Edit", "Write", "NotebookEdit", "Monitor", "EnterWorktree", "ExitWorktree")
@@ -116,12 +123,43 @@ def _required_runtime_field(payload: Mapping[str, Any], name: str) -> str:
     text = value.strip() if isinstance(value, str) else ""
     if text:
         return text
-    if name in ("prompt_id", "agent_id"):
+    if name == "prompt_id":
         raise HookDecisionError(
             "missing {}; agent-kit requires Claude Code >= {} for scoped "
             "verification state".format(name, MINIMUM_CLAUDE_CODE)
         )
+    if name == "agent_id":
+        # Unlike prompt_id, agent_id is not gated by any Claude Code version:
+        # per the documented hook payload design it is populated only inside
+        # a subagent invocation. This branch is only ever reached for a
+        # watched builder (see _actor_identity), which is a subagent by
+        # definition and therefore must carry it.
+        raise HookDecisionError(
+            "missing agent_id; a watched builder subagent must carry "
+            "agent_id for scoped verification state"
+        )
     raise HookDecisionError("missing required runtime field {}".format(name))
+
+
+def _actor_identity(payload: Mapping[str, Any]) -> str:
+    """Resolve the actor identity used to scope mutation/receipt state.
+
+    ``agent_id`` is subagent-only by Claude Code's documented hook payload
+    design; it is intentionally absent for main-session events. A watched
+    builder is a subagent by definition and must still carry it (fail
+    closed, same as before). Any other actor (main session, non-watched
+    subagents) legitimately never has it, so it gets a stable sentinel
+    identity instead of being fail-closed for a field that was never
+    supposed to exist for it.
+    """
+
+    value = get_field(payload, "agent_id")
+    text = value.strip() if isinstance(value, str) else ""
+    if text:
+        return text
+    if _is_watched_builder(payload):
+        return _required_runtime_field(payload, "agent_id")
+    return MAIN_SESSION_ACTOR
 
 
 def _project_root(payload: Mapping[str, Any]) -> pathlib.Path:
@@ -257,7 +295,7 @@ def _shell_outcome(payload: Mapping[str, Any], event: str) -> str:
 def _runtime_scope(payload: Mapping[str, Any], needs_tool: bool) -> Tuple[str, str, str, Optional[str]]:
     session_id = _required_runtime_field(payload, "session_id")
     prompt_id = _required_runtime_field(payload, "prompt_id")
-    agent_id = _required_runtime_field(payload, "agent_id")
+    agent_id = _actor_identity(payload)
     tool_use_id = _required_runtime_field(payload, "tool_use_id") if needs_tool else None
     return session_id, prompt_id, agent_id, tool_use_id
 

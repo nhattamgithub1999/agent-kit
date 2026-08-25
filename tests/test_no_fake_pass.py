@@ -12,7 +12,7 @@ import unittest
 from typing import Dict, Iterable, Mapping, Optional, Tuple
 
 from hooks._shared import StateStore, hash_value
-from tests.support import HookHarness, HookResult
+from tests.support import OMIT, HookHarness, HookResult
 
 
 HOOK = "no-fake-pass.py"
@@ -433,7 +433,16 @@ class NoFakePassV2Tests(unittest.TestCase):
             tool_use_id="missing-field",
             agent_id="actor",
         )
-        for field in ("session_id", "prompt_id", "agent_id", "tool_use_id", "cwd"):
+        # agent_id is intentionally excluded from this "any missing field
+        # always blocks" loop: per Claude Code's documented hook payload
+        # design it is subagent-only, so it is no longer unconditionally
+        # required for every actor -- only a watched builder must still
+        # carry it (see test_subagent_stop_watched_builder_without_agent_id
+        # _still_blocks), while a non-builder actor legitimately omits it
+        # (see test_non_builder_mutation_without_agent_type_or_agent_id
+        # _bumps_epoch_and_stales_receipts). Asserting an unconditional
+        # block here would encode the very bug this fix removes.
+        for field in ("session_id", "prompt_id", "tool_use_id", "cwd"):
             payload = dict(base)
             payload.pop(field, None)
             result = self.harness.run(HOOK, payload)
@@ -449,6 +458,74 @@ class NoFakePassV2Tests(unittest.TestCase):
             irrelevant.pop(field, None)
         ignored = self.harness.run(HOOK, irrelevant)
         self.assertEqual(ignored.returncode, 0, ignored.stderr)
+
+    def test_non_builder_mutation_without_agent_type_or_agent_id_bumps_epoch_and_stales_receipts(
+        self,
+    ) -> None:
+        # Root cause: per Claude Code's documented hook payload design,
+        # agent_id is present only inside a subagent; it is intentionally
+        # absent for main-session events, and the 2.1.196 milestone is tied
+        # to prompt_id, not agent_id. A PostToolUse Edit from a non-builder
+        # actor (no agent_type, no agent_id at all -- e.g. the main session)
+        # must therefore still count as a real project mutation instead of
+        # being rejected outright, and it must still stale any builder
+        # receipt chain collected earlier under the same session/prompt,
+        # exactly like every other mutation actor already does.
+        receipts = self.collect_receipts()
+        self.assertEqual(self.state_epoch(), 0)
+        payload = self.harness.payloads.post_tool_use(
+            tool_name="Edit",
+            tool_input={"path": "source.py"},
+            tool_response={"ok": True},
+            tool_use_id="edit-no-identity",
+            agent_type=OMIT,
+            agent_id=OMIT,
+        )
+        result = self.harness.run(HOOK, payload)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.state_epoch(), 1)
+        self.assertTrue(self.ready(receipts).blocked)
+
+    def test_subagent_stop_watched_builder_without_agent_id_still_blocks(self) -> None:
+        # A watched builder is a different case from the plain main-session
+        # actor above: unlike a non-builder, it is still required to carry
+        # agent_id, so a missing one must still block. The block reason must
+        # not misquote the 2.1.196 Claude Code milestone for agent_id (that
+        # milestone genuinely only governs prompt_id); this also proves the
+        # error-text fix in _required_runtime_field applies to every caller,
+        # not only the non-builder path.
+        payload = self.harness.payloads.subagent_stop(
+            result_line(
+                "READY",
+                receipts={"build": "invented", "lint": "invented", "test": "invented"},
+            ),
+            agent_type="agent-kit:builder",
+            agent_id=OMIT,
+        )
+        result = self.harness.run(HOOK, payload)
+        self.assertTrue(result.blocked, result.stderr)
+        self.assertNotIn("2.1.196", result.stderr, result.stderr)
+
+    def test_stop_fabricated_ready_without_agent_id_blocks_on_receipts_not_version(
+        self,
+    ) -> None:
+        # The main session's Stop event never carries agent_id at all (it is
+        # a subagent-only field); blocking a bogus claim here must not
+        # depend on treating that absence as a version-gated runtime error.
+        # The claim is still fabricated (invented receipts that were never
+        # recorded), so it must still block -- but for the honest reason
+        # (the receipt chain is rejected), never by citing the 2.1.196
+        # Claude Code milestone, which only actually governs prompt_id.
+        payload = self.harness.payloads.stop(
+            result_line(
+                "READY",
+                receipts={"build": "invented", "lint": "invented", "test": "invented"},
+            ),
+        )
+        result = self.harness.run(HOOK, payload)
+        self.assertTrue(result.blocked, result.stderr)
+        self.assertIn("receipt", result.stderr.lower(), result.stderr)
+        self.assertNotIn("2.1.196", result.stderr, result.stderr)
 
     def test_watched_builder_stop_is_enforced_but_other_agents_are_ignored(self) -> None:
         fake = self.harness.payloads.subagent_stop(
