@@ -10,7 +10,7 @@ buộc agent làm việc theo ba nguyên tắc:
 - **Review lại.** Việc làm xong phải đi qua vòng verify (build, typecheck, lint,
   test) và qua cổng phản biện.
 
-Phiên bản: **v1.0**. Profile: THOROUGH (siết chặt nhất).
+Phiên bản: **v1.0.2**. Profile: THOROUGH (siết chặt nhất).
 
 ## Cài đặt
 
@@ -48,7 +48,7 @@ xác suất. Bốn hook ở trên chặn thật bằng exit code, nên chúng l�
 không phải khuyến nghị.
 
 Ranh giới giữa "chặn thật" và "chỉ là chữ" được liệt kê tường minh ở cuối
-`policy/delegation.md`. Đọc mục đó trước khi tin rằng một luật nào đó tự giữ được.
+`policy/supervisor.md`. Đọc mục đó trước khi tin rằng một luật nào đó tự giữ được.
 
 ## Luồng chạy bên trong plugin
 
@@ -58,7 +58,7 @@ thiệp thật vào runtime, không phải chỗ nhắc nhở bằng chữ.
 ```mermaid
 flowchart TD
     S([Mở phiên]) --> H1["🔒 SessionStart<br/>session-policy.py"]
-    H1 -->|"nạp policy/delegation.md vào context"| P([User gửi prompt])
+    H1 -->|"nạp common.md + supervisor.md"| P([User gửi prompt])
     P --> H2["🔒 UserPromptSubmit<br/>prompt-intake.py"]
     H2 -->|"nhắc quy ước, KHÔNG phán lớp"| RC["Main session<br/>đọc file thật trước"]
     RC --> H6["🔒 PreToolUse<br/>flow-gate.py"]
@@ -69,6 +69,11 @@ flowchart TD
     DEL -->|"tra cứu"| EX["Explore<br/>read-only"]
     DEL -->|"thiết kế"| AR["architect<br/>đề xuất phương án"]
     DEL -->|"phản biện"| CR["critic<br/>không có tool"]
+
+    H8["🔒 SubagentStart · session-policy.py<br/>nạp common.md + worker.md"]
+    H8 -.-> EX
+    H8 -.-> AR
+    H8 -.-> BU
     AR --> PL
     DEL -->|"implement"| PL["Parent lập plan CHO builder<br/>các bước + tiêu chí nghiệm thu"]
     PL --> VE["verifier<br/>đối chiếu plan với code thật"]
@@ -105,7 +110,9 @@ flowchart TD
 | `agents/` | Năm subagent: `Explore` (haiku), `architect` và `critic` (opus), `builder` và `verifier` (sonnet) |
 | `hooks/` | Năm hook Python đang chạy, xem bảng ở mục dưới. `gloss-gate.py` còn trong thư mục nhưng đã gỡ khỏi `hooks.json` |
 | `skills/verify-loop/` | Skill chạy vòng verify: build, typecheck, lint, test |
-| `policy/delegation.md` | Khối policy được đưa vào context mỗi phiên |
+| `policy/common.md` | Luật áp cho mọi agent. Vào cả phiên chính lẫn subagent |
+| `policy/supervisor.md` | Luật điều phối. Chỉ vào phiên chính |
+| `policy/worker.md` | Luật thực thi. Chỉ vào subagent, không chứa bảng Routing |
 | `VERIFICATION.template.md` | Mẫu để khai lệnh build/test của từng project |
 | `glossary.example.txt` | File mẫu glossary. `verifier` tra file này khi đối chiếu nghĩa viết tắt |
 | `optional/orchestrator.md` | Bản thay thế system prompt. Không bật mặc định |
@@ -133,7 +140,7 @@ code.
 
 | Hook | Chạy lúc | Chặn cái gì |
 |---|---|---|
-| `session-policy.py` | Mở phiên | Policy bị bỏ qua vì plugin không đọc được `CLAUDE.md` |
+| `session-policy.py` | Mở phiên, và mỗi khi một subagent khởi động | Policy bị bỏ qua vì plugin không đọc được `CLAUDE.md`. Phiên chính nhận luật điều phối, subagent nhận luật thực thi |
 | `prompt-intake.py` | Người dùng gửi prompt | Quên quy ước vì policy đã ở quá xa trong context. Chỉ *nhắc*, không phán lớp |
 | `flow-gate.py` | Trước `Read`/`Grep`/`Glob`/`Bash`/`Agent`/`ExitPlanMode`/`Edit`/`Write` | Lập plan hoặc giao việc khi lượt này chưa đọc file nào; giao việc bằng prompt cụt; gọi agent không khớp nhãn plan; **giao builder khi chưa qua `verifier` hoặc prompt chưa chứa plan**; **builder ghi file khi chưa được duyệt** |
 | `plan-gate.py` | Trước khi ghi file | Nhảy vào sửa code khi chưa có plan |
@@ -141,6 +148,11 @@ code.
 
 Cả năm đều **fail-open**: khi không đọc được dữ liệu đầu vào thì trả `exit 0`,
 tức là không chặn. Thà bỏ lọt còn hơn chặn oan rồi làm nghẽn phiên làm việc.
+
+`no-fake-pass` chặn **tối đa một lần** mỗi lượt dừng. Khi hook trả `exit 2`, nền tảng
+cho subagent chạy thêm một lượt và đánh dấu lượt đó bằng `stop_hook_active`. Hook đọc
+cờ này rồi cho qua, nếu không thì agent nào không đưa nổi bằng chứng sẽ quay vòng vô
+hạn. Đây là điều đã đo bằng hook thăm dò chạy thật, không phải suy từ tài liệu.
 
 `flow-gate` tính `Bash` là khảo sát chỉ khi lệnh là lệnh đọc (`cat`, `sed`,
 `grep`, `git log`…), kể cả khi nó đứng sau `&&`. Nhiều phiên đọc code bằng shell
@@ -175,7 +187,7 @@ Plugin của Claude Code **không** nạp `CLAUDE.md` đặt ở gốc plugin
 ([tài liệu](https://code.claude.com/docs/en/plugins-reference)). Vì vậy khối
 policy không thể đi theo đường đó.
 
-Thay vào đó, hook `session-policy.py` đọc file `policy/delegation.md` rồi trả nội
+Thay vào đó, hook `session-policy.py` đọc các file trong `policy/` rồi trả nội
 dung về qua `hookSpecificOutput.additionalContext` ở event `SessionStart`. Muốn
 sửa policy thì sửa đúng file đó, vì không có bản copy nào khác trong repo.
 
@@ -323,7 +335,7 @@ chữ cái đầu của cụm từ đứng sau dấu hai chấm với token vi�
 không, nên nó bắt nhầm mọi câu tiếng Việt kỹ thuật có dạng `TOKEN` + dấu hai chấm
 + một cụm từ. Số đo trên `~/.claude/gloss-gate.log`: trong 60 lần chặn, 30 lần là
 token `VERIFY` — tức là hook chặn đúng câu `CHƯA VERIFY: <lý do>` mà chính
-`policy/delegation.md` bắt buộc agent phải viết khi không chạy được lệnh verify.
+`policy/common.md` bắt buộc agent phải viết khi không chạy được lệnh verify.
 Kit phạt sự trung thực. Các lần chặn khác gồm `POST`, `GET`, `IDE`, `FINDINGS` —
 đều là heading hoặc câu thường.
 

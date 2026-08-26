@@ -135,6 +135,15 @@ def main() -> int:
         elif agent not in WATCHED and bare_name(agent) not in WATCHED:
             return 0
 
+    # CHẶN TỐI ĐA MỘT LẦN mỗi lượt dừng. `stop_hook_active` là true khi lượt hiện
+    # tại SINH RA TỪ một hook chặn trước đó — đã đo thật: lượt hai tới với cờ này
+    # bật và nội dung đúng thứ stderr yêu cầu. Chặn tiếp ở đây thì agent nào không
+    # đưa nổi bằng chứng sẽ quay vòng vô hạn. Thà bỏ lọt còn hơn treo phiên.
+    if payload.get("stop_hook_active") or payload.get("stopHookActive"):
+        log(f"BỎ QUA: lượt này đã do hook chặn sinh ra (agent={agent or '?'}) — "
+            "không chặn lần hai")
+        return 0
+
     text = last_message(payload) or read_transcript(payload) or "\n".join(walk_strings(payload))
     if not text.strip():
         log(f"FAIL-OPEN: không lấy được report (agent={agent or '?'})")

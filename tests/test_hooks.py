@@ -185,6 +185,76 @@ mv = json.loads((REPO / ".claude-plugin" / "marketplace.json").read_text(encodin
 check(f"20 version đồng bộ (plugin={pv} marketplace={mv})", pv, mv)
 
 
+# 21-26: session-policy — chọn policy theo hook_event_name, chống lặp theo
+# agent_id cho SubagentStart (không phải session_id, vì event này bắn lại sau
+# khi subagent bị chặn rồi chạy tiếp trong cùng phiên).
+
+# 21: SessionStart -> nội dung supervisor.md có, worker.md không có
+sid21 = str(uuid.uuid4())
+p = run("session-policy.py", {"hook_event_name": "SessionStart", "session_id": sid21})
+check("21 SessionStart -> supervisor có, worker không",
+      p.returncode, 0, "Routing" in p.stdout and "Luật thực thi" not in p.stdout)
+
+# 22: SubagentStart (agent_id riêng) -> nội dung worker.md có, '## Routing' không có
+sid22, aid22 = str(uuid.uuid4()), str(uuid.uuid4())
+p = run("session-policy.py", {
+    "hook_event_name": "SubagentStart", "session_id": sid22, "agent_id": aid22,
+})
+check("22 SubagentStart -> worker có, '## Routing' không",
+      p.returncode, 0, "Luật thực thi" in p.stdout and "## Routing" not in p.stdout)
+
+# 23: cả hai event trên đều chứa nội dung common.md (No-fabrication)
+sid23a = str(uuid.uuid4())
+p23a = run("session-policy.py", {"hook_event_name": "SessionStart", "session_id": sid23a})
+sid23b, aid23b = str(uuid.uuid4()), str(uuid.uuid4())
+p23b = run("session-policy.py", {
+    "hook_event_name": "SubagentStart", "session_id": sid23b, "agent_id": aid23b,
+})
+check("23 SessionStart và SubagentStart đều chứa common.md",
+      p23a.returncode, 0,
+      p23b.returncode == 0 and "No-fabrication" in p23a.stdout and "No-fabrication" in p23b.stdout)
+
+# 24: event lạ -> exit 0, stdout rỗng
+sid24 = str(uuid.uuid4())
+p = run("session-policy.py", {"hook_event_name": "Stop", "session_id": sid24})
+check("24 event lạ (Stop) -> stdout rỗng", p.returncode, 0, p.stdout.strip() == "")
+
+# 25: hai SubagentStart khác agent_id -> cả hai đều có stdout không rỗng
+sid25 = str(uuid.uuid4())
+aid25a, aid25b = str(uuid.uuid4()), str(uuid.uuid4())
+p25a = run("session-policy.py", {
+    "hook_event_name": "SubagentStart", "session_id": sid25, "agent_id": aid25a,
+})
+p25b = run("session-policy.py", {
+    "hook_event_name": "SubagentStart", "session_id": sid25, "agent_id": aid25b,
+})
+check("25 hai SubagentStart khác agent_id -> cả hai stdout không rỗng",
+      p25a.returncode, 0,
+      p25b.returncode == 0 and p25a.stdout.strip() != "" and p25b.stdout.strip() != "")
+
+# 26: hai SubagentStart CÙNG agent_id -> lần hai stdout rỗng (chống lặp)
+sid26 = str(uuid.uuid4())
+aid26 = str(uuid.uuid4())
+p26a = run("session-policy.py", {
+    "hook_event_name": "SubagentStart", "session_id": sid26, "agent_id": aid26,
+})
+p26b = run("session-policy.py", {
+    "hook_event_name": "SubagentStart", "session_id": sid26, "agent_id": aid26,
+})
+check("26 hai SubagentStart cùng agent_id -> lần hai stdout rỗng",
+      p26a.returncode, 0,
+      p26b.returncode == 0 and p26a.stdout.strip() != "" and p26b.stdout.strip() == "")
+
+
+# 27: SessionStart KHÔNG chống lặp — nó bắn lại sau /compact và /resume với cùng
+# session_id, đúng lúc context vừa bị cắt nên policy cần được nạp lại.
+_s = str(uuid.uuid4())
+_a = run("session-policy.py", {"hook_event_name": "SessionStart", "session_id": _s})
+_b = run("session-policy.py", {"hook_event_name": "SessionStart", "session_id": _s})
+check("27 SessionStart lặp lại vẫn tiêm (compact/resume)",
+      [_a.returncode, bool(_a.stdout.strip()), bool(_b.stdout.strip())], [0, True, True])
+
+
 # 13: mọi hook trong hooks.json phải TỒN TẠI và CHẠY TRỰC TIẾP ĐƯỢC.
 # `hooks.json` gọi thẳng đường dẫn file, không qua `python3 <file>`. Một hook thiếu
 # bit thực thi sẽ im lặng không chạy, trong khi test gọi qua sys.executable vẫn xanh.
