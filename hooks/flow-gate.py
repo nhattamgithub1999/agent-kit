@@ -23,14 +23,23 @@ nên hook phân biệt được lệnh ghi này đến từ builder hay từ phi
 
 STATE: thư mục phẳng, không SQLite, không module dùng chung (cố ý):
   <tempfile.gettempdir()>/agent-kit-flow/<session_id>/<prompt_id>/
-      recon       đã có lần đọc file nào trong lượt
-      agents      tập nhãn [agent] trích từ plan
-      verified    verifier đã được gọi trong lượt
-      builder_ok  builder đã được spawn kèm plan hợp lệ, sau verifier
+      recon         đã có lần đọc file nào trong lượt
+      agents        tập nhãn [agent] trích từ plan
+      verified      verifier đã được gọi trong lượt (chỉ còn dùng cho chế độ
+                    hạ cấp FLOW_GATE_REQUIRE_APPROVAL=0, xem bên dưới)
+      builder_ok    builder đã được spawn kèm plan hợp lệ, qua vòng duyệt
+      verification  verdict thật của verifier, ghi bởi hook verdict-gate.py
+                    (SubagentStop): một dòng, ba field cách nhau bằng TAB
+                    `<approved|blocked>\tsubagent_stop\t<verdict thô>`.
+                    Không có file này nghĩa là trạng thái `pending`.
 BIẾN MÔI TRƯỜNG: FLOW_GATE=off tắt hẳn (exit 0 ngay từ đầu);
 FLOW_GATE_MIN_PROMPT ngưỡng ký tự tối thiểu cho prompt giao Agent (mặc định
 200); FLOW_GATE_MIN_STEPS số bước tối thiểu trong plan giao builder (mặc định
-2); FLOW_GATE_REQUIRE_VERIFIER=0 bỏ yêu cầu chạy verifier trước builder.
+2); FLOW_GATE_REQUIRE_VERIFIER=0 bỏ yêu cầu chạy verifier trước builder (chế
+độ cũ, dựa trên marker `verified`); FLOW_GATE_REQUIRE_APPROVAL=0 hạ cấp cổng
+duyệt thật (`verification`) về lại cổng cũ dựa trên `verified`/FLOW_GATE_REQUIRE_VERIFIER
+— mọi lần hạ cấp đều bị ghi log vào ~/.claude/agent-kit-gate.log vì một lần
+chặn oan dễ thành `export` vĩnh viễn trong ~/.zshrc mà không ai biết.
 
 FAIL-OPEN (cố ý) khi: stdin không phải JSON; thiếu session_id/prompt_id;
 không ghi được state (đĩa/quyền); ExitPlanMode mà `tool_input` rỗng hoặc
@@ -66,8 +75,22 @@ LABEL_RE = re.compile(r"^\s*[-*]?\s*\[([a-zA-Z][a-zA-Z-]*)\]", re.MULTILINE)
 WRITE_TOOLS = {"Edit", "Write", "NotebookEdit"}
 MIN_STEPS = int(os.environ.get("FLOW_GATE_MIN_STEPS", "2"))
 NEED_VERIFIER = os.environ.get("FLOW_GATE_REQUIRE_VERIFIER", "1") != "0"
+NEED_APPROVAL = os.environ.get("FLOW_GATE_REQUIRE_APPROVAL", "1") != "0"
 STEP_RE = re.compile(r"^\s*(?:\d+[.)]|[-*])\s+\S", re.MULTILINE)
 DOD_RE = re.compile(r"(DoD|nghi[ệe]m thu|ti[êe]u ch[íi]|acceptance|verification)\s*[:：]", re.I)
+PROMPT_VERDICT_RE = re.compile(r"VERIFIER VERDICT:\s*(SAFE_TO_BUILD|NEEDS_FIX|BLOCK)", re.I)
+
+GATE_LOG = pathlib.Path.home() / ".claude" / "agent-kit-gate.log"
+
+def log_decision(result: str, pid, detail: str) -> None:
+    """Ghi một dòng quyết định của cổng vào ~/.claude/agent-kit-gate.log.
+    Lỗi ghi log (đĩa/quyền) KHÔNG được làm hook fail: bọc OSError."""
+    try:
+        line = f"flow-gate {result} pid={str(pid)[:8]} {detail}\n"
+        with GATE_LOG.open("a", encoding="utf-8") as f:
+            f.write(line)
+    except OSError:
+        pass
 
 def safe(name) -> str:
     """Lọc về ký tự an toàn cho tên thư mục, giống plan-gate.py:68-69."""
@@ -103,6 +126,7 @@ def main() -> int:
         state_dir.mkdir(parents=True, exist_ok=True)
         recon, agents = state_dir / "recon", state_dir / "agents"
         verified, builder_ok = state_dir / "verified", state_dir / "builder_ok"
+        verification = state_dir / "verification"
     except OSError:
         return 0  # FAIL-OPEN
 
@@ -162,12 +186,51 @@ def main() -> int:
                 verified.touch()
             except OSError:
                 pass
+            log_decision("allow", pid, "verifier spawned sub=verifier")
         if sub == "builder":
-            if NEED_VERIFIER and not verified.exists():
-                return deny(
-                    "BLOCKED bởi flow-gate: chưa cho `verifier` đối chiếu plan với code thật "
-                    "trước khi giao builder. Gọi `verifier` với plan định giao, rồi spawn "
-                    "builder. Bỏ yêu cầu này: FLOW_GATE_REQUIRE_VERIFIER=0.")
+            if not NEED_APPROVAL:
+                # Chế độ hạ cấp: quay lại hành vi cũ dựa trên marker `verified`.
+                log_decision(
+                    "downgrade", pid,
+                    "FLOW_GATE_REQUIRE_APPROVAL=0 -- cong duyet that (verification) bi bo qua, "
+                    "dung lai kiem tra marker verified cu")
+                if NEED_VERIFIER and not verified.exists():
+                    return deny(
+                        "BLOCKED bởi flow-gate: chưa cho `verifier` đối chiếu plan với code thật "
+                        "trước khi giao builder. Gọi `verifier` với plan định giao, rồi spawn "
+                        "builder. Bỏ yêu cầu này: FLOW_GATE_REQUIRE_VERIFIER=0.")
+            else:
+                approval = "pending"
+                if verification.exists():
+                    try:
+                        content = verification.read_text(encoding="utf-8")
+                        field0 = content.split("\t")[0].strip().lower()
+                        if field0 in ("approved", "blocked"):
+                            approval = field0
+                    except OSError:
+                        approval = "pending"
+                if approval == "blocked":
+                    return deny(
+                        "BLOCKED bởi flow-gate: verifier đã kết luận BLOCKED cho lượt này nên "
+                        "builder không được giao việc. Parent phải recon lại, sửa plan, rồi cho "
+                        "verifier chạy lại và ra verdict mới. Thoát khẩn (không khuyến khích): "
+                        "FLOW_GATE_REQUIRE_APPROVAL=0.")
+                if approval == "pending":
+                    m = PROMPT_VERDICT_RE.search(prompt)
+                    if not m:
+                        return deny(
+                            "BLOCKED bởi flow-gate: lượt này chưa có verdict nào của verifier cho "
+                            "builder. Hoặc (1) gọi `verifier` để nó chạy và ghi verdict, hoặc (2) "
+                            "trích nguyên văn dòng `VERIFIER VERDICT: <SAFE_TO_BUILD|NEEDS_FIX|BLOCK>` "
+                            "vào prompt giao builder.")
+                    verdict = m.group(1).upper()
+                    if verdict != "SAFE_TO_BUILD":
+                        return deny(
+                            f"BLOCKED bởi flow-gate: dòng VERIFIER VERDICT trong prompt là "
+                            f"{verdict}, không phải SAFE_TO_BUILD, nên builder không được giao "
+                            "việc. Sửa plan theo góp ý của verifier rồi cho verdict lại.")
+                    log_decision("allow", pid, "nguon=prompt verdict=SAFE_TO_BUILD")
+                # approval == "approved": qua, không cần log riêng (verdict-gate.py đã ghi).
             if len(STEP_RE.findall(prompt)) < MIN_STEPS or not DOD_RE.search(prompt):
                 return deny(
                     f"BLOCKED bởi flow-gate: prompt giao builder chưa chứa plan. Cần ít nhất "
