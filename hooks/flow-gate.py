@@ -23,7 +23,13 @@ nên hook phân biệt được lệnh ghi này đến từ builder hay từ phi
 
 STATE: thư mục phẳng, không SQLite, không module dùng chung (cố ý):
   <tempfile.gettempdir()>/agent-kit-flow/<session_id>/<prompt_id>/
-      recon         đã có lần đọc file nào trong lượt
+      recon         JSON {"status": "started", "count": <int>, "evidence":
+                    [{"tool": .., "target": ..}, ...]} — bằng chứng các lần
+                    Read/Grep/Glob/Bash-đọc trong lượt; `evidence` tối đa 20
+                    phần tử (giữ 20 đầu) nhưng `count` vẫn đếm đúng số thật.
+                    Điều kiện chặn ở ExitPlanMode/Agent vẫn CHỈ LÀ SỰ TỒN TẠI
+                    của file này (recon.exists()), không phải nội dung — nội
+                    dung chỉ để người đọc audit.
       agents        tập nhãn [agent] trích từ plan
       verified      verifier đã được gọi trong lượt (chỉ còn dùng cho chế độ
                     hạ cấp FLOW_GATE_REQUIRE_APPROVAL=0, xem bên dưới)
@@ -100,6 +106,55 @@ def bare_name(agent: str) -> str:
     """Tên agent sau dấu hai chấm cuối ("agent-kit:builder" -> "builder")."""
     return agent.rsplit(":", 1)[-1].strip().lower()
 
+RECON_EVIDENCE_CAP = 20
+
+def recon_target(tool: str, tin) -> str:
+    """Rút gọn tool_input thành một mẩu bằng chứng ngắn, tối đa 200 ký tự.
+    Không lấy được gì (tool lạ, thiếu field) thì trả chuỗi rỗng."""
+    if not isinstance(tin, dict):
+        return ""
+    if tool in ("Read", "Glob"):
+        value = tin.get("file_path") or tin.get("pattern") or ""
+    elif tool == "Grep":
+        value = tin.get("pattern") or ""
+        path = tin.get("path")
+        if path:
+            value = f"{value} {path}".strip()
+    elif tool == "Bash":
+        value = tin.get("command") or ""
+    else:
+        value = ""
+    return str(value)[:200]
+
+def note_recon(recon: pathlib.Path, tool: str, tin) -> None:
+    """Ghi/append một bằng chứng recon vào file `recon` dạng JSON đọc được:
+    {"status": "started", "count": <int>, "evidence": [{"tool":.., "target":..}]}.
+    File cũ đọc được thì cộng dồn count và append evidence; không có/rỗng/hỏng
+    thì bắt đầu lại từ count=1. `evidence` bị chặn ở RECON_EVIDENCE_CAP phần tử
+    (giữ phần tử ĐẦU), nhưng `count` vẫn tăng đúng số thật.
+    Fail-open TUYỆT ĐỐI: mọi lỗi đọc/parse/ghi đều không được làm hook lỗi, và
+    file `recon` phải TỒN TẠI sau cùng (recon.exists() là điều kiện chặn ở
+    ExitPlanMode/Agent) — except cuối rơi về hành vi cũ là recon.touch()."""
+    try:
+        count, evidence = 0, []
+        if recon.exists():
+            try:
+                data = json.loads(recon.read_text(encoding="utf-8"))
+                count = int(data.get("count", 0))
+                evidence = list(data.get("evidence") or [])
+            except (json.JSONDecodeError, ValueError, TypeError, OSError):
+                count, evidence = 0, []
+        count += 1
+        if len(evidence) < RECON_EVIDENCE_CAP:
+            evidence.append({"tool": tool, "target": recon_target(tool, tin)})
+        payload = {"status": "started", "count": count, "evidence": evidence}
+        recon.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        try:
+            recon.touch()
+        except OSError:
+            pass
+
 def deny(msg: str) -> int:
     print(msg, file=sys.stderr)
     return 2
@@ -146,10 +201,7 @@ def main() -> int:
     if tool == "Bash" and isinstance(tin, dict):
         is_recon = bool(BASH_READ_RE.search(str(tin.get("command") or "")))
     if is_recon:
-        try:
-            recon.touch()
-        except OSError:
-            pass
+        note_recon(recon, tool, tin)
         return 0
     if tool == "Bash":
         return 0  # lệnh Bash không phải lệnh đọc: không tính recon, cũng không chặn
