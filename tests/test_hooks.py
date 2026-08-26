@@ -411,6 +411,99 @@ check("44 không có tên agent -> fail-open",
           {"last_assistant_message": "VERDICT: READY\n```\n2 failed\n```"}).returncode, 0)
 
 
+# ---------------------------------------------------------------------------
+# 45-53: recon đọc được (state dễ audit) và repair loop có trần (lô 3).
+# ---------------------------------------------------------------------------
+
+def read_recon(sid, pid):
+    """Nội dung marker `recon` đã parse. None nếu không có/không phải JSON."""
+    f = sdir(sid, pid) / "recon"
+    if not f.exists():
+        return None
+    try:
+        return json.loads(f.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+# 45: marker recon giờ là JSON đọc được, không còn là file rỗng.
+s45, q45 = str(uuid.uuid4()), str(uuid.uuid4())
+flow(s45, q45, "Read", file_path=str(REPO / "README.md"))
+d45 = read_recon(s45, q45)
+check("45 recon là JSON có count và evidence",
+      [(d45 or {}).get("count"), len((d45 or {}).get("evidence") or [])], [1, 1])
+
+# 46: count tăng theo từng lần đọc, evidence ghi đúng tool.
+flow(s45, q45, "Grep", pattern="note_recon")
+flow(s45, q45, "Bash", command="cat hooks/flow-gate.py")
+d46 = read_recon(s45, q45)
+check("46 recon count=3 và ghi đúng ba tool",
+      [d46["count"], [e["tool"] for e in d46["evidence"]]],
+      [3, ["Read", "Grep", "Bash"]])
+
+# 47: evidence có trần 20 phần tử để state không phình, nhưng count vẫn ĐÚNG.
+s47, q47 = str(uuid.uuid4()), str(uuid.uuid4())
+for _ in range(25):
+    flow(s47, q47, "Read", file_path=str(REPO / "README.md"))
+d47 = read_recon(s47, q47)
+check("47 count=25 nhưng evidence bị chặn ở 20",
+      [d47["count"], len(d47["evidence"])], [25, 20])
+
+# 48: marker bị ghi rác -> hook không lỗi, và state trở lại JSON hợp lệ.
+s48, q48 = str(uuid.uuid4()), str(uuid.uuid4())
+d = sdir(s48, q48)
+d.mkdir(parents=True, exist_ok=True)
+(d / "recon").write_text("not a json at all {{{", encoding="utf-8")
+flow(s48, q48, "Read", file_path=str(REPO / "README.md"))
+check("48 recon rác -> phục hồi thành JSON count=1",
+      (read_recon(s48, q48) or {}).get("count"), 1)
+
+# 49: recon vẫn là ĐIỀU KIỆN CHẶN — nội dung chỉ để audit, không nới gate.
+s49, q49 = str(uuid.uuid4()), str(uuid.uuid4())
+check("49 chưa recon -> Agent vẫn bị chặn",
+      flow(s49, q49, "Agent", subagent_type="agent-kit:Explore", prompt=LONG_PROMPT), 2)
+
+
+FAIL_REPORT = "VERDICT: READY\n```\n2 failed, 1 passed\n```"
+
+
+def nfp_ids(sid, pid, text=FAIL_REPORT, env=None, **extra):
+    p = {"agent_type": "agent-kit:builder", "session_id": sid, "prompt_id": pid,
+         "last_assistant_message": text}
+    p.update(extra)
+    return run("no-fake-pass.py", p, env).returncode
+
+# 50: repair loop có TRẦN. Ba lần đầu chặn; lần thứ tư dừng và trả về parent
+# thay vì chặn tiếp — chặn mãi thì agent không đưa nổi bằng chứng sẽ quay vòng
+# vô hạn, đúng nguyên tắc đã ghi ở nhánh stop_hook_active.
+s50, q50 = str(uuid.uuid4()), str(uuid.uuid4())
+check("50 repair loop: 4 lần -> 2,2,2,0",
+      [nfp_ids(s50, q50) for _ in range(4)], [2, 2, 2, 0])
+
+# 51: counter đếm thật, đọc được để audit.
+check("51 repair_attempts đếm đúng 4",
+      (sdir(s50, q50) / "repair_attempts").read_text(encoding="utf-8").strip(), "4")
+
+# 52: trần đổi được bằng biến môi trường.
+s52, q52 = str(uuid.uuid4()), str(uuid.uuid4())
+check("52 NOFAKEPASS_MAX_ATTEMPTS=1 -> 2,0",
+      [nfp_ids(s52, q52, env={"NOFAKEPASS_MAX_ATTEMPTS": "1"}) for _ in range(2)],
+      [2, 0])
+
+# 53: không định vị được lượt thì không đếm được -> giữ NGUYÊN hành vi cũ (chặn),
+# chứ không im lặng cho qua.
+check("53 thiếu session_id/prompt_id -> vẫn chặn cả 5 lần",
+      [run("no-fake-pass.py",
+           {"agent_type": "agent-kit:builder",
+            "last_assistant_message": FAIL_REPORT}).returncode for _ in range(5)],
+      [2, 2, 2, 2, 2])
+
+# 54: báo cáo TRUNG THỰC không phải một lần chặn, nên không được tính vào trần.
+s54, q54 = str(uuid.uuid4()), str(uuid.uuid4())
+rc54 = nfp_ids(s54, q54, text="CHƯA VERIFY: chưa khai lệnh test trong CLAUDE.md.")
+check("54 CHƯA VERIFY -> 0 và KHÔNG đếm vào trần",
+      [rc54, (sdir(s54, q54) / "repair_attempts").exists()], [0, False])
+
+
 # 13: mọi hook trong hooks.json phải TỒN TẠI và CHẠY TRỰC TIẾP ĐƯỢC.
 # `hooks.json` gọi thẳng đường dẫn file, không qua `python3 <file>`. Một hook thiếu
 # bit thực thi sẽ im lặng không chạy, trong khi test gọi qua sys.executable vẫn xanh.

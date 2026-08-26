@@ -77,19 +77,23 @@ flowchart TD
     AR --> PL
     DEL -->|"implement"| PL["Parent lập plan CHO builder<br/>các bước + tiêu chí nghiệm thu"]
     PL --> VE["verifier<br/>đối chiếu plan với code thật"]
-    VE --> H7["🔒 PreToolUse Agent<br/>flow-gate.py"]
+    VE --> H9["🔒 SubagentStop<br/>verdict-gate.py<br/>trích VERDICT, ghi state"]
+    H9 --> VDEC{"state verification?"}
+    VDEC -->|"BLOCKED (NEEDS_FIX / BLOCK)"| PL
+    VDEC -->|"APPROVED (SAFE_TO_BUILD)"| H7["🔒 PreToolUse Agent<br/>flow-gate.py"]
     H7 -->|"chưa qua verifier, chặn"| PL
     H7 -->|"prompt giao việc thiếu plan, chặn"| PL
-    H7 -->|"parent chốt bằng lời gọi spawn"| BU["builder"]
+    H7 -->|"state approved, parent chốt bằng lời gọi spawn"| BU["builder"]
 
     BU --> H3["🔒 PreToolUse Edit/Write<br/>flow-gate.py"]
     H3 -->|"builder chưa được duyệt, chặn ghi file"| BU
     H3 -->|"đã duyệt"| WR["Ghi file<br/>rồi chạy skill verify-loop"]
     WR --> H4["🔒 SubagentStop<br/>no-fake-pass.py"]
     H4 -->|"nói đã pass mà không có output, chặn"| BU
-    H4 --> OUT([Trả lời user])
-    EX --> OUT
-    CR --> OUT
+    H4 --> SYN["Main session<br/>tổng hợp kết quả"]
+    EX --> SYN
+    CR --> SYN
+    SYN --> OUT([Trả lời user])
 ```
 
 Đọc sơ đồ theo ba tầng:
@@ -108,7 +112,7 @@ flowchart TD
 | Thành phần | Nội dung |
 |---|---|
 | `agents/` | Năm subagent: `Explore` (haiku), `architect` và `critic` (opus), `builder` và `verifier` (sonnet) |
-| `hooks/` | Năm hook Python đang chạy, xem bảng ở mục dưới. `gloss-gate.py` còn trong thư mục nhưng đã gỡ khỏi `hooks.json` |
+| `hooks/` | Sáu hook Python đang chạy, xem bảng ở mục dưới. `gloss-gate.py` còn trong thư mục nhưng đã gỡ khỏi `hooks.json` |
 | `skills/verify-loop/` | Skill chạy vòng verify: build, typecheck, lint, test |
 | `policy/common.md` | Luật áp cho mọi agent. Vào cả phiên chính lẫn subagent |
 | `policy/supervisor.md` | Luật điều phối. Chỉ vào phiên chính |
@@ -133,7 +137,7 @@ codebase. `critic` trả lời câu hỏi "lập luận có chặt không" nên 
 tool, và chỉ được xem câu hỏi gốc cùng câu trả lời chứ không xem quá trình suy
 luận — đó là điều giữ cho nó độc lập.
 
-### Năm hook, năm chốt tất định
+### Sáu hook, sáu chốt tất định
 
 Prompt chỉ làm giảm xác suất agent làm sai. Hook mới là thứ chặn thật, bằng exit
 code.
@@ -145,8 +149,9 @@ code.
 | `flow-gate.py` | Trước `Read`/`Grep`/`Glob`/`Bash`/`Agent`/`ExitPlanMode`/`Edit`/`Write` | Lập plan hoặc giao việc khi lượt này chưa đọc file nào; giao việc bằng prompt cụt; gọi agent không khớp nhãn plan; **giao builder khi chưa qua `verifier` hoặc prompt chưa chứa plan**; **builder ghi file khi chưa được duyệt** |
 | `plan-gate.py` | Trước khi ghi file | Nhảy vào sửa code khi chưa có plan |
 | `no-fake-pass.py` | `builder` kết thúc | Báo "đã pass" mà không kèm lệnh đã chạy và output thật |
+| `verdict-gate.py` | Bất kỳ subagent nào kết thúc (`SubagentStop`, không matcher) | Không chặn gì cả. Nó chỉ trích dòng `### VERDICT: SAFE_TO_BUILD \| NEEDS_FIX \| BLOCK` từ lượt dừng của `verifier` rồi ghi lại thành state `verification` (`approved`/`blocked`) để `flow-gate.py` đọc khi builder được spawn — nguồn mạnh hơn dòng `VERIFIER VERDICT:` mà parent tự chép vào prompt |
 
-Cả năm đều **fail-open**: khi không đọc được dữ liệu đầu vào thì trả `exit 0`,
+Cả sáu đều **fail-open**: khi không đọc được dữ liệu đầu vào thì trả `exit 0`,
 tức là không chặn. Thà bỏ lọt còn hơn chặn oan rồi làm nghẽn phiên làm việc.
 
 `no-fake-pass` chặn **tối đa một lần** mỗi lượt dừng. Khi hook trả `exit 2`, nền tảng
@@ -166,9 +171,15 @@ chính đã có plan nào đó. Thứ tự bắt buộc, cả ba mắt xích đ�
 1. **Parent lập plan** cho việc sắp giao, rồi nhúng thẳng vào prompt giao việc.
    Cổng đòi ít nhất `FLOW_GATE_MIN_STEPS` bước (mặc định 2) và ít nhất một dòng
    tiêu chí nghiệm thu.
-2. **`verifier` đối chiếu plan với code thật.** Cổng đòi một lời gọi `verifier`
-   trong cùng lượt trước khi `builder` được spawn. Đây là chỗ luật "verifier
-   chạy trước builder" chuyển từ văn bản sang cưỡng chế.
+2. **`verifier` đối chiếu plan với code thật.** Khi `verifier` dừng, hook
+   `verdict-gate.py` trích dòng `### VERDICT: SAFE_TO_BUILD | NEEDS_FIX | BLOCK`
+   từ báo cáo của nó và ghi thành state `verification` (`approved`/`blocked`).
+   Cổng đòi state đó là `approved` trước khi `builder` được spawn — không chỉ
+   đòi một lời gọi `verifier` đã xảy ra. Có nguồn dự phòng là dòng
+   `VERIFIER VERDICT:` mà parent trích vào prompt giao việc, đọc trong cùng
+   payload, nhưng state (nguồn mạnh) luôn thắng prompt (nguồn yếu). Ba trạng
+   thái: pending (chưa có gì → chặn), approved, blocked. Đây là chỗ luật
+   "verifier chạy trước builder" chuyển từ văn bản sang cưỡng chế.
 3. **Parent chốt** bằng chính lời gọi spawn. Chỉ khi bước 1 và 2 đã xong thì
    lệnh `Edit`/`Write` của `builder` mới được cho qua.
 
@@ -176,7 +187,9 @@ Cổng phân biệt được lệnh ghi của `builder` với lệnh ghi của p
 trường `agent_type` có trong payload `PreToolUse` của subagent.
 
 Nới: `FLOW_GATE_REQUIRE_VERIFIER=0` bỏ bước 2, `FLOW_GATE_MIN_STEPS` hạ ngưỡng
-bước, `FLOW_GATE=off` tắt hẳn.
+bước, `FLOW_GATE=off` tắt hẳn. `FLOW_GATE_REQUIRE_APPROVAL=0` hạ cấp việc đòi
+state `approved` về hành vi cũ (chỉ đòi một lời gọi `verifier` đã xảy ra); mọi
+lần hạ cấp kiểu này đều bị ghi log vào `~/.claude/agent-kit-gate.log`.
 
 `gloss-gate.py` vẫn nằm trong thư mục nhưng **không còn được đăng ký** trong
 `hooks.json`. Lý do ở mục "Những giới hạn đã biết".
@@ -231,16 +244,24 @@ chạy `claude`.
 
 | Biến | Mặc định | Tác dụng |
 |---|---|---|
-| `ROUTE_MIN_CHARS` | 12 | Prompt ngắn hơn ngưỡng này thì không phân loại |
+| `INTAKE_MIN_CHARS` | 12 | Prompt ngắn hơn ngưỡng này thì `prompt-intake.py` không phân loại |
 | `PLAN_GATE_FREE_EDITS` | 0 | Số lần ghi file được miễn trước khi gate bắt đầu chặn |
 | `PLAN_GATE` | — | Đặt `off` để tắt plan gate |
 | `PLAN_GATE_PLAN_TOOLS` | — | Thêm tool được tính là "đã có plan", cách nhau bằng dấu phẩy |
+| `FLOW_GATE` | — | Đặt `off` để tắt hẳn `flow-gate.py` |
+| `FLOW_GATE_MIN_PROMPT` | 200 | Số ký tự tối thiểu của prompt giao việc để được coi là đủ, không phải prompt cụt |
+| `FLOW_GATE_MIN_STEPS` | 2 | Số bước tối thiểu plan phải liệt kê |
+| `FLOW_GATE_REQUIRE_VERIFIER` | 1 | Đặt `0` để bỏ yêu cầu `verifier` chạy trước `builder` |
+| `FLOW_GATE_REQUIRE_APPROVAL` | 1 | Đặt `0` để hạ cấp về hành vi cũ (không đòi verdict `approved` từ state); mọi lần hạ cấp đều bị ghi log vào `~/.claude/agent-kit-gate.log` |
 | `NOFAKEPASS_AGENTS` | `builder` | Agent nào bị soi khi khẳng định "đã pass" |
 | `NOFAKEPASS_STRICT` | — | Đặt `1` để chặn cả khi không nhận diện được agent nào đang chạy |
-| `GLOSS_GATE` | `block` | `warn` là chỉ ghi log, `off` là tắt hẳn |
-| `GLOSS_MIN_LEN` | 3 | Độ dài tối thiểu của viết tắt mới bị soi |
+| `NOFAKEPASS_MAX_ATTEMPTS` | 3 | Số lượt dừng tối đa mà `no-fake-pass.py` được phép bắt lại trước khi cho qua |
+| `DUMP` | — | Đặt để `no-fake-pass.py` ghi nguyên payload thật ra `~/.claude/hook-payload-sample.json` (debug, không phải núm chỉnh hành vi gate) |
+| `VERDICT_GATE` | — | Đặt `off` để tắt hẳn `verdict-gate.py` |
 | `POLICY_HOOK` | — | Đặt `off` để không đưa policy vào context |
 | `POLICY_FILE` | — | Trỏ tới file policy khác |
+| `GLOSS_GATE` | `block` | `warn` là chỉ ghi log, `off` là tắt hẳn. **Chỉ có tác dụng nếu tự đăng ký lại `gloss-gate.py` vào `hooks.json`** — mặc định hook này không chạy, xem "Những giới hạn đã biết" |
+| `GLOSS_MIN_LEN` | 3 | Độ dài tối thiểu của viết tắt mới bị soi. Cùng điều kiện: chỉ có tác dụng khi `gloss-gate.py` được đăng ký lại |
 
 ## Hiệu quả: đo được gì, chưa đo được gì
 
