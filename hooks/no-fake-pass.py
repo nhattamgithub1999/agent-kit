@@ -48,6 +48,12 @@ PASS_CLAIM = re.compile(
 EVIDENCE = re.compile(r"(```|^\s*\$\s+\S|CHƯA VERIFY)", re.M)
 
 
+def bare_name(agent: str) -> str:
+    """Tên agent sau dấu hai chấm cuối cùng. "agent-kit:builder" -> "builder";
+    "builder" -> "builder" (không đổi khi không có dấu hai chấm)."""
+    return agent.rsplit(":", 1)[-1]
+
+
 def log(msg: str) -> None:
     try:
         LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -126,8 +132,17 @@ def main() -> int:
                 log("FAIL-OPEN: payload không có tên agent — không chặn "
                     "(NOFAKEPASS_STRICT=1 để chặn như cũ)")
                 return 0
-        elif agent not in WATCHED:
+        elif agent not in WATCHED and bare_name(agent) not in WATCHED:
             return 0
+
+    # CHẶN TỐI ĐA MỘT LẦN mỗi lượt dừng. `stop_hook_active` là true khi lượt hiện
+    # tại SINH RA TỪ một hook chặn trước đó — đã đo thật: lượt hai tới với cờ này
+    # bật và nội dung đúng thứ stderr yêu cầu. Chặn tiếp ở đây thì agent nào không
+    # đưa nổi bằng chứng sẽ quay vòng vô hạn. Thà bỏ lọt còn hơn treo phiên.
+    if payload.get("stop_hook_active") or payload.get("stopHookActive"):
+        log(f"BỎ QUA: lượt này đã do hook chặn sinh ra (agent={agent or '?'}) — "
+            "không chặn lần hai")
+        return 0
 
     text = last_message(payload) or read_transcript(payload) or "\n".join(walk_strings(payload))
     if not text.strip():
