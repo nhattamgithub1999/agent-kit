@@ -17,6 +17,31 @@ MỌI subagent, kể cả Explore/critic/verifier read-only. Bằng chứng: 8/1
 trong no-fake-pass.log là "BLOCK agent=?". Nay không xác định được agent →
 FAIL-OPEN. Muốn giữ hành vi cũ: NOFAKEPASS_STRICT=1.
 
+ĐÃ SIẾT (26/08/2026): gloss-gate — hook tiền nhiệm theo hướng tương tự — bị gỡ
+khỏi hooks.json vì PHẠT SỰ TRUNG THỰC: đo thật 30/60 lần chặn là chặn nhầm
+đúng câu "CHƯA VERIFY: <lý do>" mà policy bắt buộc khi không chạy được lệnh
+verify. Cổng ở đây giữ nguyên nguyên tắc đó — luật mới KHÔNG được chặn một
+báo cáo trung thực nói rõ chưa verify được. Hai luật chặn áp dụng độc lập:
+
+  1. MÂU THUẪN NỘI TẠI: report vừa khẳng định pass (PASS_CLAIM) vừa chứa dấu
+     hiệu thất bại (FAIL_SIGN, vd "2 failed", "Error:", "traceback") → chặn
+     luôn, bất kể có "bằng chứng" nào đi kèm hay không — output dán vào có
+     thể tự chứng minh report vừa nói dối vừa vô tình lộ ra kết quả FAIL.
+  2. THIẾU BẰNG CHỨNG: report khẳng định pass mà không có ÍT NHẤT MỘT trong
+     ba dạng bằng chứng:
+       a. dòng dấu nhắc lệnh (`$ ...`),
+       b. block ba backtick có nội dung KHÔNG RỖNG và chứa dấu hiệu kết quả
+          chạy lệnh thật (pass/fail/ok/error/warning/exit code/N passed/...),
+       c. lời khai "CHƯA VERIFY: <lý do>" ĐÚNG DẠNG (có dấu hai chấm + lý do
+          phía sau, không phải chữ trần) — nhưng CHỈ tính khi report đó
+          KHÔNG đồng thời chứa PASS_CLAIM. Một report đã tự nhận CHƯA VERIFY
+          thì việc chặn ở đây không xảy ra nữa vì không còn PASS_CLAIM nào
+          để xét (xem điều kiện ở main()); dạng (c) không được dùng như tấm
+          khiên đứng cạnh một khẳng định pass giả trong CÙNG report.
+     Một report CHỈ có "CHƯA VERIFY: <lý do>" và không có PASS_CLAIM nào luôn
+     đi qua (exit 0) — đây chính là ca gloss-gate từng chặn sai, KHÔNG được
+     lặp lại.
+
 Chạy một lần với DUMP=1 để xem payload thật rồi siết lại:
 
     DUMP=1 <lệnh làm subagent chạy>     # ghi ~/.claude/hook-payload-sample.json
@@ -44,8 +69,27 @@ PASS_CLAIM = re.compile(
     r"0 lỗi|no errors|✅|VERDICT:\s*READY)",
     re.I,
 )
-# Bằng chứng: block code, dấu nhắc lệnh, hoặc thừa nhận chưa verify
-EVIDENCE = re.compile(r"(```|^\s*\$\s+\S|CHƯA VERIFY)", re.M)
+# Dấu hiệu THẤT BẠI. Khớp CÙNG PASS_CLAIM trong một report -> mâu thuẫn nội
+# tại, chặn ngay bất kể "bằng chứng" gì đi kèm.
+FAIL_SIGN = re.compile(
+    r"(\d+\s+failed|\bFAILED\b|\bError:|exit (code )?[1-9]|NOT READY|\btraceback\b)",
+    re.I,
+)
+# Bằng chứng dạng (a): dòng dấu nhắc lệnh.
+CMD_PROMPT = re.compile(r"^\s*\$\s+\S", re.M)
+# Nội dung bên trong block ba backtick — hai dạng: nhiều dòng (có newline sau
+# dấu mở, dòng đầu có thể là tên ngôn ngữ) và một dòng (không newline nào ở
+# giữa, không có cách nào tách "ngôn ngữ" khỏi "nội dung" nên coi cả chuỗi là
+# nội dung).
+CODE_BLOCK_MULTILINE = re.compile(r"```[^\n]*\n(.*?)```", re.S)
+CODE_BLOCK_INLINE = re.compile(r"```([^`\n]*)```")
+# Bằng chứng dạng (b): nội dung block phải chứa dấu hiệu kết quả chạy lệnh thật.
+RESULT_SIGN = re.compile(
+    r"(pass|fail|ok\b|error|warning|exit code|\d+\s*/\s*\d+|\d+\s+(passed|failed|error))",
+    re.I,
+)
+# Bằng chứng dạng (c): lời khai chưa verify ĐÚNG DẠNG — có dấu hai chấm + lý do.
+CHUA_VERIFY = re.compile(r"CHƯA VERIFY\s*:\s*\S", re.I)
 
 
 def bare_name(agent: str) -> str:
@@ -105,6 +149,25 @@ def last_message(payload) -> str:
     return ""
 
 
+def code_block_contents(text: str):
+    """Nội dung bên trong mọi block ba backtick trong `text`, đa dòng lẫn một
+    dòng (xem CODE_BLOCK_MULTILINE / CODE_BLOCK_INLINE ở trên)."""
+    return CODE_BLOCK_MULTILINE.findall(text) + CODE_BLOCK_INLINE.findall(text)
+
+
+def has_evidence(text: str) -> bool:
+    """Bằng chứng hợp lệ theo ba dạng (a)/(b)/(c) — xem docstring đầu file."""
+    if CMD_PROMPT.search(text):
+        return True
+    for block in code_block_contents(text):
+        stripped = block.strip()
+        if stripped and RESULT_SIGN.search(stripped):
+            return True
+    if not PASS_CLAIM.search(text) and CHUA_VERIFY.search(text):
+        return True
+    return False
+
+
 def main() -> int:
     raw = sys.stdin.read()
     try:
@@ -149,15 +212,30 @@ def main() -> int:
         log(f"FAIL-OPEN: không lấy được report (agent={agent or '?'})")
         return 0
 
-    if PASS_CLAIM.search(text) and not EVIDENCE.search(text):
-        msg = (
-            "BLOCKED bởi no-fake-pass hook: report khẳng định đã pass nhưng "
-            "KHÔNG kèm lệnh đã chạy + output thật. Chạy lại lệnh verify và dán "
-            "output, hoặc ghi 'CHƯA VERIFY: <lý do>'."
-        )
-        log(f"BLOCK agent={agent or '?'}")
-        print(msg, file=sys.stderr)
-        return 2  # exit 2 = chặn, stderr quay lại cho model
+    if PASS_CLAIM.search(text):
+        if FAIL_SIGN.search(text):
+            msg = (
+                "BLOCKED bởi no-fake-pass hook: report vừa khẳng định đã pass "
+                "vừa chứa dấu hiệu THẤT BẠI (vd 'failed', 'Error:', 'traceback', "
+                "'NOT READY'). Báo trạng thái THẬT: nếu có lỗi thì ghi rõ lỗi, "
+                "đừng ghi 'pass'/'READY'. Chạy lại lệnh verify và dán output "
+                "thật, hoặc ghi 'CHƯA VERIFY: <lý do>' mà KHÔNG kèm khẳng định "
+                "pass."
+            )
+            log(f"BLOCK(mâu thuẫn pass+fail) agent={agent or '?'}")
+            print(msg, file=sys.stderr)
+            return 2  # exit 2 = chặn, stderr quay lại cho model
+        if not has_evidence(text):
+            msg = (
+                "BLOCKED bởi no-fake-pass hook: report khẳng định đã pass nhưng "
+                "KHÔNG kèm bằng chứng hợp lệ (dòng `$ <lệnh>`, hoặc block "
+                "```...``` không rỗng có kết quả chạy lệnh thật như 'pass'/"
+                "'failed'/'N/N'). Chạy lại lệnh verify và dán output thật, "
+                "hoặc ghi 'CHƯA VERIFY: <lý do>' mà KHÔNG kèm khẳng định pass."
+            )
+            log(f"BLOCK(thiếu bằng chứng) agent={agent or '?'}")
+            print(msg, file=sys.stderr)
+            return 2  # exit 2 = chặn, stderr quay lại cho model
 
     return 0
 

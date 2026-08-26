@@ -66,7 +66,7 @@ Escape hatch: agent DỪNG-VÀ-BÁO khi fact được cấp mâu thuẫn rõ v�
 | Giao việc phải kèm ngữ cảnh, không giao rỗng | `flow-gate` | độ dài `tool_input.prompt` của tool `Agent` |
 | Spawn đúng agent mà plan đã gán | `flow-gate` | `subagent_type` đối chiếu nhãn `[agent]` trích từ plan |
 | Prompt giao builder phải chứa plan | `flow-gate` | số dòng bước + có dòng tiêu chí nghiệm thu |
-| `verifier` chạy trước khi giao builder | `flow-gate` | có lời gọi `Agent` với `subagent_type` là verifier cùng `prompt_id` |
+| `verifier` phải APPROVE trước khi giao builder | `flow-gate` | trạng thái trong `verification` của lượt: `approved` cho qua, `blocked` chặn, chưa có gì thì đọc dòng `VERIFIER VERDICT:` trong prompt giao builder |
 | builder chỉ ghi file sau khi plan được duyệt | `flow-gate` | `agent_type` của lệnh `Edit`/`Write` cộng dấu duyệt của lượt |
 | Không báo pass khi chưa chạy lệnh | `no-fake-pass` | có khẳng định pass mà thiếu block lệnh/output |
 | Phải có plan trước khi ghi file | `plan-gate` | đã gọi tool plan nào trong phiên chưa |
