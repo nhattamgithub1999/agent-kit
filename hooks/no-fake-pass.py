@@ -48,6 +48,12 @@ PASS_CLAIM = re.compile(
 EVIDENCE = re.compile(r"(```|^\s*\$\s+\S|CHƯA VERIFY)", re.M)
 
 
+def bare_name(agent: str) -> str:
+    """Tên agent sau dấu hai chấm cuối cùng. "agent-kit:builder" -> "builder";
+    "builder" -> "builder" (không đổi khi không có dấu hai chấm)."""
+    return agent.rsplit(":", 1)[-1]
+
+
 def log(msg: str) -> None:
     try:
         LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -126,7 +132,7 @@ def main() -> int:
                 log("FAIL-OPEN: payload không có tên agent — không chặn "
                     "(NOFAKEPASS_STRICT=1 để chặn như cũ)")
                 return 0
-        elif agent not in WATCHED:
+        elif agent not in WATCHED and bare_name(agent) not in WATCHED:
             return 0
 
     text = last_message(payload) or read_transcript(payload) or "\n".join(walk_strings(payload))

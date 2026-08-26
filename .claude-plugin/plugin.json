@@ -1,7 +1,7 @@
 {
   "name": "agent-kit",
   "displayName": "agent-kit",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Subagent + verification loop cho Claude Code. Ba trụ: không bịa (grounding bằng tín hiệu tất định), có mục tiêu (DoD kiểm chứng được + stop condition), review lại (verification loop + critic gate).",
   "author": {
     "name": "TamBN3",
