@@ -1,8 +1,8 @@
 {
   "name": "agent-kit",
   "displayName": "agent-kit",
-  "version": "1.0.2",
-  "description": "Subagent + verification loop cho Claude Code. Ba trụ: không bịa (grounding bằng tín hiệu tất định), có mục tiêu (DoD kiểm chứng được + stop condition), review lại (verification loop + critic gate).",
+  "version": "1.0.3",
+  "description": "Subagent + verification loop cho Claude Code. Ba trụ: không bịa (grounding bằng nguồn thật), có mục tiêu (DoD kiểm chứng được + stop condition), review lại (verification loop + critic gate). Bản mặc định tiêm policy và ghi log, không hook nào chặn bằng exit code; ba gate tuỳ chọn đi kèm repo.",
   "author": {
     "name": "TamBN3",
     "email": "tambn3@fpt.com"

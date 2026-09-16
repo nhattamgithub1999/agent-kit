@@ -128,7 +128,22 @@ def main() -> int:
                 break
     if WATCHED:
         if not agent:
-            if not STRICT:
+            # ĐO THẬT 07/09/2026 (hook-payload-sample.json): payload SubagentStop
+            # có field agent_type nhưng giá trị là CHUỖI RỖNG "" ở top-level, dù
+            # matcher settings.json "(^|:)builder$" đã lọc đúng và chỉ gọi hook
+            # này khi builder dừng — matcher hoạt động đúng, chỉ giá trị field
+            # trong payload là rỗng. Tên agent thật (vd "builder") chỉ nằm trong
+            # payload["background_tasks"][i]["agent_type"] (nested, agent KHÁC
+            # đang chạy song song) — không phải của chính agent đang dừng, nên
+            # không dùng được để dò tên ở đây.
+            # Vì vậy: nếu WATCHED chỉ có đúng 1 tên, tin tưởng matcher đã lọc
+            # đúng — không fail-open nữa. Nếu WATCHED có ≥2 tên thì không suy
+            # luận được (matcher không nói agent nào trong số đó), giữ fail-open.
+            if len(WATCHED) == 1:
+                agent = next(iter(WATCHED))
+                log(f"INFER agent={agent} (agent_type rỗng trong payload, suy từ "
+                    "matcher settings.json vì WATCHED chỉ có 1 tên)")
+            elif not STRICT:
                 log("FAIL-OPEN: payload không có tên agent — không chặn "
                     "(NOFAKEPASS_STRICT=1 để chặn như cũ)")
                 return 0

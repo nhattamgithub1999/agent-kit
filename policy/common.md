@@ -30,3 +30,22 @@ Gặp viết tắt / thuật ngữ nghiệp vụ chưa resolve được (vd `NDV
 ## Escalation — subagent KHÔNG tự spawn subagent
 Không agent nào có tool `Agent`. Cần năng lực cao hơn → DỪNG, trả về parent kèm
 lý do. Parent quyết định gọi tiếp.
+
+## Decision ladder — chống over-engineering (builder, trước khi viết code mới)
+Trước khi viết code mới, kiểm THEO THỨ TỰ 7 bậc sau, dừng ở bậc đầu tiên đáp ứng được:
+1. Có thật sự cần tồn tại không (YAGNI) — bớt được thì bỏ.
+2. Đã có sẵn trong codebase chưa (reuse) — đọc code thật trước khi kết luận chưa có.
+3. Stdlib / thư viện chuẩn của ngôn ngữ có đáp ứng không.
+4. Tính năng native của platform/framework có đáp ứng không.
+5. Dependency đã cài sẵn trong project có đáp ứng không.
+6. Giải được bằng một dòng (one-liner) không.
+7. Chỉ khi cả 6 bậc trên đều không đáp ứng mới viết implementation tối thiểu.
+
+Ladder này KHÔNG áp dụng để cắt giảm validation, error handling, security, hay
+accessibility — các thứ đó không nằm trong phạm vi "tối giản hoá".
+
+## Nợ kỹ thuật có chủ đích — quy ước `agentkit:`
+Khi cố tình cắt góc có lý do rõ ràng (khác với thiếu sót/bug không chủ ý), chèn
+comment `agentkit: <lý do ngắn>` ngay tại dòng code liên quan trong file đang
+sửa, để người đọc sau phân biệt được "cắt góc có chủ đích, có lý do ghi rõ" với
+"thiếu sót không được phát hiện".

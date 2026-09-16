@@ -33,23 +33,13 @@
         ]
       }
     ],
-    "PreToolUse": [
+    "PostToolUse": [
       {
-        "matcher": "Edit|Write|NotebookEdit|TodoWrite|ExitPlanMode|EnterPlanMode|EnterWorktree",
+        "matcher": "Write|Edit",
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/plan-gate.py",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Read|Grep|Glob|Bash|Agent|ExitPlanMode|Edit|Write|NotebookEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/flow-gate.py",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/memory-nudge.py",
             "timeout": 5
           }
         ]
@@ -61,8 +51,33 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/no-fake-pass.py",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/skill-nudge.py",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/env GLOSS_GATE=warn \"${CLAUDE_PLUGIN_ROOT}\"/hooks/gloss-gate.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/env GLOSS_GATE=warn \"${CLAUDE_PLUGIN_ROOT}\"/hooks/gloss-gate.py",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/memory-nudge.py",
+            "timeout": 5
           }
         ]
       }

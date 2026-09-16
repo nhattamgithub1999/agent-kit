@@ -51,8 +51,23 @@ check("2 no-fake-pass builder -> 2", p.returncode, 2)
 p = run("no-fake-pass.py", {"agent_type": "agent-kit:Explore", "last_assistant_message": PASS_MSG})
 check("3 no-fake-pass agent-kit:Explore -> 0", p.returncode, 0)
 
+# 4: payload KHÔNG có tên agent. Đo thật 07/09/2026: payload SubagentStop có
+# agent_type nhưng giá trị rỗng, dù matcher "(^|:)builder$" đã lọc đúng. Cũ:
+# fail-open -> hook không bao giờ bắn. Mới: WATCHED chỉ có 1 tên thì tin matcher.
 p = run("no-fake-pass.py", {"last_assistant_message": PASS_MSG})
-check("4 no-fake-pass no agent_type -> 0", p.returncode, 0)
+check("4 no agent_type, WATCHED 1 tên -> suy từ matcher, chặn -> 2", p.returncode, 2)
+
+p = run("no-fake-pass.py", {"agent_type": "", "last_assistant_message": PASS_MSG})
+check("4b agent_type rỗng -> chặn -> 2", p.returncode, 2)
+
+# WATCHED có >= 2 tên thì matcher không nói được agent nào, giữ nguyên fail-open.
+p = run("no-fake-pass.py", {"last_assistant_message": PASS_MSG},
+        {"NOFAKEPASS_AGENTS": "builder,verifier"})
+check("4c no agent_type, WATCHED 2 tên -> fail-open -> 0", p.returncode, 0)
+
+p = run("no-fake-pass.py", {"last_assistant_message": PASS_MSG},
+        {"NOFAKEPASS_AGENTS": "builder,verifier", "NOFAKEPASS_STRICT": "1"})
+check("4d no agent_type, WATCHED 2 tên + STRICT -> chặn -> 2", p.returncode, 2)
 
 LONG_PROMPT = "x" * 220
 
@@ -270,6 +285,29 @@ for _ev, groups in cfg["hooks"].items():
             elif not os.access(f, os.X_OK):
                 bad.append(f"{f.name}: thiếu bit thực thi")
 check("13 mọi hook trong hooks.json tồn tại và executable", bad, [])
+
+# 28: bản DOCTRINE — hooks.json KHÔNG được đăng ký ba hook chặn. README, policy/
+# supervisor.md và mô tả plugin đều khẳng định "không hook nào chặn bằng exit code";
+# nếu ai đó thêm gate vào hooks.json mà quên sửa tài liệu thì tài liệu thành lời
+# khống. Test này khoá đúng cặp đó lại với nhau.
+GATES = {"flow-gate.py", "plan-gate.py", "no-fake-pass.py"}
+wired = set()
+for _ev, groups in cfg["hooks"].items():
+    for g in groups:
+        for h in g["hooks"]:
+            wired.add(h["command"].split("/hooks/")[-1].split()[0])
+check("28 hooks.json không wire ba hook chặn", sorted(wired & GATES), [])
+check("28b năm hook doctrine đều được wire",
+      sorted({"session-policy.py", "prompt-intake.py", "gloss-gate.py",
+              "memory-nudge.py", "skill-nudge.py"} - wired), [])
+
+# 29: gloss-gate phải được ghim warn ngay trong hooks.json. Mặc định của hook là
+# block, và mục "Những giới hạn đã biết" ghi rõ vì sao block bắt nhầm quá nhiều.
+gloss_cmds = [h["command"] for _e, gs in cfg["hooks"].items() for g in gs
+              for h in g["hooks"] if "gloss-gate.py" in h["command"]]
+check("29 mọi lời gọi gloss-gate đều ghim GLOSS_GATE=warn",
+      [c for c in gloss_cmds if "GLOSS_GATE=warn" not in c], [])
+check("29b gloss-gate có được wire", bool(gloss_cmds), True)
 
 fails = [r for r in results if not r[1]]
 for name, ok, detail in results:

@@ -13,7 +13,7 @@
    Bước không gán được cho ai là bước chưa đủ rõ để giao.
 4. Thiếu tiêu chí kiểm chứng được → HỎI tối đa 2 câu. KHÔNG đoán rồi làm.
 
-## Vòng duyệt trước khi giao `builder` — BẮT BUỘC, có hook chặn
+## Vòng duyệt trước khi giao `builder` — BẮT BUỘC (kỷ luật, KHÔNG có hook chặn)
 `builder` KHÔNG tự lập plan cho mình. Thứ tự đúng:
 1. **Bạn lập plan** cho việc sắp giao, rồi nhúng THẲNG vào prompt giao việc:
    ít nhất 2 bước đánh số hoặc gạch đầu dòng, VÀ ít nhất một dòng tiêu chí
@@ -21,8 +21,8 @@
 2. **Cho `verifier` đối chiếu plan đó với code thật.** VERDICT BLOCK → sửa plan,
    không giao builder.
 3. **Bạn chốt** bằng chính lời gọi spawn `builder`.
-Chưa đủ bước 1 và 2 thì lời gọi spawn bị chặn; và lệnh ghi file của `builder`
-cũng bị chặn cho tới khi vòng duyệt xong.
+Không hook nào cưỡng chế thứ tự này trong bản mặc định. Bỏ bước 2 thì không có
+gì báo cho bạn biết — đó chính là lý do nó nằm ở đây dưới dạng luật bắt buộc.
 
 Bậc là thứ bạn TỰ KHAI. Không có cách nào đo đúng độ phức tạp từ bề mặt prompt:
 `"Refactor toàn bộ tầng auth."` và `"Sửa typo dòng 4."` không phân biệt được bằng
@@ -55,35 +55,41 @@ NGUYÊN VĂN findings của agent trước; task = "thực thi", không "khám p
 NGOẠI LỆ: với critic, cố tình KHÔNG nhúng reasoning/trace.
 Escape hatch: agent DỪNG-VÀ-BÁO khi fact được cấp mâu thuẫn rõ với thực tế.
 
-## Cái gì hook CƯỠNG CHẾ được, cái gì chỉ là VĂN BẢN
+## Cái gì hook LÀM THẬT, cái gì chỉ là VĂN BẢN
 Đọc mục này trước khi tin rằng một luật ở trên sẽ tự động được giữ.
 
-**Cưỡng chế được** — hook quan sát tín hiệu tất định trong cùng prompt:
+**Hook có thật trong bản mặc định** — cả năm đều KHÔNG chặn, chúng chỉ tiêm
+ngữ cảnh hoặc ghi log:
 
-| Luật | Hook | Tín hiệu |
+| Hook | Chạy lúc | Làm gì |
 |---|---|---|
-| Phải đọc file trước khi giao việc hoặc chốt plan | `flow-gate` | có `Read`/`Grep`/`Glob` cùng `prompt_id` chưa |
-| Giao việc phải kèm ngữ cảnh, không giao rỗng | `flow-gate` | độ dài `tool_input.prompt` của tool `Agent` |
-| Spawn đúng agent mà plan đã gán | `flow-gate` | `subagent_type` đối chiếu nhãn `[agent]` trích từ plan |
-| Prompt giao builder phải chứa plan | `flow-gate` | số dòng bước + có dòng tiêu chí nghiệm thu |
-| `verifier` chạy trước khi giao builder | `flow-gate` | có lời gọi `Agent` với `subagent_type` là verifier cùng `prompt_id` |
-| builder chỉ ghi file sau khi plan được duyệt | `flow-gate` | `agent_type` của lệnh `Edit`/`Write` cộng dấu duyệt của lượt |
-| Không báo pass khi chưa chạy lệnh | `no-fake-pass` | có khẳng định pass mà thiếu block lệnh/output |
-| Phải có plan trước khi ghi file | `plan-gate` | đã gọi tool plan nào trong phiên chưa |
+| `session-policy` | `SessionStart`, `SubagentStart` | Tiêm chính file policy này vào context. Không có nó thì phiên chính và subagent không thấy luật |
+| `prompt-intake` | `UserPromptSubmit` | Nhắc lại quy ước mỗi lượt. Chỉ nhắc, không phán prompt thuộc lớp nào |
+| `gloss-gate` | `Stop`, `SubagentStop` | Ghi log token viết tắt nghi bịa nghĩa. Mặc định `warn` = chỉ log, KHÔNG chặn |
+| `memory-nudge` | `PostToolUse(Write`/`Edit)`, `Stop` | Gợi ý lưu memory khi lượt có tín hiệu quyết định. Chỉ gợi ý |
+| `skill-nudge` | `SubagentStop(builder)` | Gợi ý đúc kết skill sau task chạm ≥3 file và đã READY. Chỉ gợi ý |
+
+Ba hook chặn (`flow-gate`, `plan-gate`, `no-fake-pass`) VẪN nằm trong `hooks/`
+nhưng KHÔNG được đăng ký trong `hooks.json`. Muốn bật thì tự thêm vào; chừng nào
+chưa thêm, mọi luật dưới đây chỉ là văn bản.
 
 **KHÔNG cưỡng chế được** — chỉ là văn bản, phụ thuộc bạn tự giác:
 
-- Bậc khai có tương xứng với việc thật hay không. Hook chỉ đối chiếu bậc với
-  hành vi spawn, không đánh giá được task khó tới đâu.
+- **Toàn bộ quy trình ở các mục trên.** Đọc file trước khi giao việc, giao việc
+  kèm ngữ cảnh, spawn đúng agent mà plan đã gán, prompt giao builder phải chứa
+  plan, `verifier` chạy trước `builder`, builder chỉ ghi file sau khi plan được
+  duyệt, không báo pass khi chưa chạy lệnh, phải có plan trước khi ghi file —
+  bản mặc định KHÔNG có hook nào cưỡng chế những điều này.
+- Bậc khai có tương xứng với việc thật hay không. Không có tín hiệu tất định nào
+  đo được task khó tới đâu.
 - Tiêu chí sau `DoD:` có thật sự kiểm chứng được hay chỉ là chữ "DoD:".
-- `verifier` có ĐỌC plan tử tế hay chỉ chạy cho có. Hook thấy nó được gọi,
-  không thấy nó kết luận gì. Bạn vẫn phải đọc VERDICT của nó.
-- Subagent có ĐỌC ngữ cảnh được cấp hay không. Hook thấy prompt gửi đi, không
-  thấy subagent đọc gì.
+- `verifier` có ĐỌC plan tử tế hay chỉ chạy cho có. Bạn vẫn phải đọc VERDICT
+  của nó.
+- Subagent có ĐỌC ngữ cảnh được cấp hay không.
 - Findings của `architect` có được copy NGUYÊN VĂN sang prompt giao `builder` hay không.
   Không có artifact trung gian nào để hook đối chiếu, và `architect` không có tool `Write`
   nên không tự ghi ra file được. Đây là kỷ luật của bạn, không phải cổng.
-- ATTEMPT CAP = 3. Không có counter nào đếm. Đừng tưởng đây là cổng.
 - Ask-loop: "lẽ ra phải hỏi mà lại đoán" không có tín hiệu tất định.
 - Bảng Routing ở trên. Bản 1.0 từng biến nó thành cổng bằng regex trên text
   prompt và phán sai — `đánh giá` bị xếp vào phản biện. Đã gỡ.
+- ATTEMPT CAP = 3. Không có counter nào đếm.

@@ -25,7 +25,10 @@ STATE: thư mục phẳng, không SQLite, không module dùng chung (cố ý):
   <tempfile.gettempdir()>/agent-kit-flow/<session_id>/<prompt_id>/
       recon       đã có lần đọc file nào trong lượt
       agents      tập nhãn [agent] trích từ plan
-      verified    verifier đã được gọi trong lượt
+  <tempfile.gettempdir()>/agent-kit-flow/<session_id>/  (khoá theo session, KHÔNG
+  theo prompt_id — đo thật 07/09/2026: prompt_id không bắc cầu được qua ranh
+  giới cha/con khi phiên chính đóng lượt trước khi builder ghi file xong)
+      verified    verifier đã được gọi, còn hiệu lực cho lần spawn builder kế
       builder_ok  builder đã được spawn kèm plan hợp lệ, sau verifier
 BIẾN MÔI TRƯỜNG: FLOW_GATE=off tắt hẳn (exit 0 ngay từ đầu);
 FLOW_GATE_MIN_PROMPT ngưỡng ký tự tối thiểu cho prompt giao Agent (mặc định
@@ -99,10 +102,22 @@ def main() -> int:
     if not sid or not pid:
         return 0  # FAIL-OPEN: không định vị được state cho lượt này
     state_dir = STATE_ROOT / safe(sid) / safe(pid)
+    # `verified`/`builder_ok` bắc cầu giữa lời gọi Agent CỦA CHA (phiên chính, ở
+    # prompt_id của lượt đó) và lời gọi Edit CỦA CON (subagent builder, xảy ra
+    # SAU đó — có thể sau khi phiên chính đã đóng lượt bằng 1 câu trả lời text).
+    # ĐO THẬT 07/09/2026 (~/.claude/flow-gate-payload-sample.jsonl, đã xoá sau
+    # khi dùng xong): prompt_id KHÔNG bắc cầu qua ranh giới cha-con một khi
+    # phiên chính đã kết thúc lượt trước khi builder thực thi Edit — builder
+    # luôn thấy builder_ok.exists()=False dù cha đã touch đúng theo plan.
+    # session_id là định danh DUY NHẤT ổn định xuyên suốt (đã đo thật, khớp cả
+    # 2 phía). Theo đúng pattern plan-gate.py:68 (cũng chỉ khoá theo session_id,
+    # không gặp bug này) — dùng session_dir cho riêng 2 file này.
+    session_dir = STATE_ROOT / safe(sid)
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
+        session_dir.mkdir(parents=True, exist_ok=True)
         recon, agents = state_dir / "recon", state_dir / "agents"
-        verified, builder_ok = state_dir / "verified", state_dir / "builder_ok"
+        verified, builder_ok = session_dir / "verified", session_dir / "builder_ok"
     except OSError:
         return 0  # FAIL-OPEN
 

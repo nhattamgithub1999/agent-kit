@@ -10,7 +10,9 @@ buộc agent làm việc theo ba nguyên tắc:
 - **Review lại.** Việc làm xong phải đi qua vòng verify (build, typecheck, lint,
   test) và qua cổng phản biện.
 
-Phiên bản: **v1.0.2**. Profile: THOROUGH (siết chặt nhất).
+Phiên bản: **v1.0.3**. Profile mặc định: DOCTRINE — plugin tiêm luật và ghi
+log, **không hook nào chặn bằng exit code**. Ba hook chặn vẫn đi kèm repo, bật
+bằng tay, xem mục "Bật lại ba gate".
 
 ## Cài đặt
 
@@ -32,22 +34,23 @@ Cài xong cần khởi động lại phiên để Claude Code nạp agent và ho
 
 ## Nó giải quyết vấn đề gì
 
-Năm kiểu sai mà một agent lập trình hay mắc, và trong bộ kit này mỗi kiểu có một
-chốt chặn riêng:
+Năm kiểu sai mà một agent lập trình hay mắc, và bộ kit này xử lý mỗi kiểu bằng
+cách nào:
 
-| Kiểu sai | Trông như thế nào | Chốt chặn |
+| Kiểu sai | Trông như thế nào | Bộ kit làm gì |
 |---|---|---|
-| Báo cáo khống | "Đã sửa xong, test pass hết" — nhưng chưa chạy lệnh test nào | `no-fake-pass.py` chặn lượt trả về nếu không kèm output thật |
-| Nhảy vào code | Sửa file ngay từ câu đầu, chưa ai biết "xong" nghĩa là gì | `plan-gate.py` chặn lệnh ghi file khi phiên chưa có plan |
-| Giao việc mù | Lập plan và gọi subagent khi chưa mở một file nào của repo | `flow-gate.py` chặn `Agent` và `ExitPlanMode` khi lượt này chưa đọc gì |
-| Plan không có người làm | Plan liệt kê việc nhưng không ghi ai làm bước nào | `flow-gate.py` đối chiếu `subagent_type` với nhãn `[agent]` trích từ plan |
-| Bỏ qua quy trình | Policy nằm trong `CLAUDE.md` ở quá xa nên lượt đầu quên mất | `session-policy.py` và `prompt-intake.py` đưa policy vào đúng chỗ, đúng lúc |
+| Báo cáo khống | "Đã sửa xong, test pass hết" — nhưng chưa chạy lệnh test nào | Luật trong `policy/common.md` và `agents/builder.md`: khẳng định pass phải kèm lệnh + output thật. Kiểm bằng `no-fake-pass.py`, **mặc định không bật** |
+| Nhảy vào code | Sửa file ngay từ câu đầu, chưa ai biết "xong" nghĩa là gì | Luật Bước 0 trong `policy/supervisor.md`: đọc file → khai bậc → plan có DoD. Kiểm bằng `plan-gate.py`, **mặc định không bật** |
+| Giao việc mù | Lập plan và gọi subagent khi chưa mở một file nào của repo | Cùng luật Bước 0. Kiểm bằng `flow-gate.py`, **mặc định không bật** |
+| Plan không có người làm | Plan liệt kê việc nhưng không ghi ai làm bước nào | Luật "plan có người phụ trách": mỗi bước một nhãn `[agent]` + một dòng DoD |
+| Bỏ qua quy trình | Policy nằm trong `CLAUDE.md` ở quá xa nên lượt đầu quên mất | `session-policy.py` và `prompt-intake.py` đưa policy vào đúng chỗ, đúng lúc — **đây là hai hook chạy mặc định** |
 
-Điểm chung: chúng **không** phải lời khuyên viết trong prompt. Prompt chỉ làm giảm
-xác suất. Bốn hook ở trên chặn thật bằng exit code, nên chúng là ràng buộc chứ
-không phải khuyến nghị.
+Nói thẳng ranh giới: ở bản mặc định, bộ kit **không chặn** bạn hay agent làm sai.
+Nó nạp luật vào đúng chỗ, và ghi log khi thấy tín hiệu nghi ngờ. Prompt chỉ làm
+giảm xác suất, không triệt tiêu — muốn ràng buộc bằng exit code thì bật ba gate
+theo mục "Bật lại ba gate".
 
-Ranh giới giữa "chặn thật" và "chỉ là chữ" được liệt kê tường minh ở cuối
+Ranh giới giữa "hook làm thật" và "chỉ là chữ" được liệt kê tường minh ở cuối
 `policy/supervisor.md`. Đọc mục đó trước khi tin rằng một luật nào đó tự giữ được.
 
 ## Luồng chạy bên trong plugin
@@ -57,58 +60,54 @@ thiệp thật vào runtime, không phải chỗ nhắc nhở bằng chữ.
 
 ```mermaid
 flowchart TD
-    S([Mở phiên]) --> H1["🔒 SessionStart<br/>session-policy.py"]
+    S([Mở phiên]) --> H1["🔔 SessionStart<br/>session-policy.py"]
     H1 -->|"nạp common.md + supervisor.md"| P([User gửi prompt])
-    P --> H2["🔒 UserPromptSubmit<br/>prompt-intake.py"]
+    P --> H2["🔔 UserPromptSubmit<br/>prompt-intake.py"]
     H2 -->|"nhắc quy ước, KHÔNG phán lớp"| RC["Main session<br/>đọc file thật trước"]
-    RC --> H6["🔒 PreToolUse<br/>flow-gate.py"]
-    H6 -->|"chưa đọc gì mà đã giao việc, chặn"| RC
-    H6 -->|"đã có recon"| M["Main session<br/>khai bậc · plan có nhãn · DoD"]
+    RC --> M["Main session<br/>khai bậc · plan có nhãn · DoD"]
     M --> DEL{"Việc này của ai?"}
 
     DEL -->|"tra cứu"| EX["Explore<br/>read-only"]
     DEL -->|"thiết kế"| AR["architect<br/>đề xuất phương án"]
     DEL -->|"phản biện"| CR["critic<br/>không có tool"]
 
-    H8["🔒 SubagentStart · session-policy.py<br/>nạp common.md + worker.md"]
+    H8["🔔 SubagentStart · session-policy.py<br/>nạp common.md + worker.md"]
     H8 -.-> EX
     H8 -.-> AR
     H8 -.-> BU
     AR --> PL
     DEL -->|"implement"| PL["Parent lập plan CHO builder<br/>các bước + tiêu chí nghiệm thu"]
     PL --> VE["verifier<br/>đối chiếu plan với code thật"]
-    VE --> H7["🔒 PreToolUse Agent<br/>flow-gate.py"]
-    H7 -->|"chưa qua verifier, chặn"| PL
-    H7 -->|"prompt giao việc thiếu plan, chặn"| PL
-    H7 -->|"parent chốt bằng lời gọi spawn"| BU["builder"]
+    VE -->|"VERDICT SAFE_TO_BUILD"| BU["builder"]
+    VE -->|"VERDICT BLOCK"| PL
 
-    BU --> H3["🔒 PreToolUse Edit/Write<br/>flow-gate.py"]
-    H3 -->|"builder chưa được duyệt, chặn ghi file"| BU
-    H3 -->|"đã duyệt"| WR["Ghi file<br/>rồi chạy skill verify-loop"]
-    WR --> H4["🔒 SubagentStop<br/>no-fake-pass.py"]
-    H4 -->|"nói đã pass mà không có output, chặn"| BU
+    BU --> WR["Ghi file<br/>rồi chạy skill verify-loop"]
+    WR --> H4["🔔 SubagentStop<br/>skill-nudge.py · gloss-gate.py (warn)"]
     H4 --> OUT([Trả lời user])
     EX --> OUT
     CR --> OUT
+    OUT --> H5["🔔 Stop<br/>memory-nudge.py · gloss-gate.py (warn)"]
 ```
+
+Chuông 🔔 nghĩa là hook có chạy nhưng **không chặn**. Bản mặc định không có ổ
+khoá nào; sơ đồ này là sơ đồ thật, không phải sơ đồ mong muốn.
 
 Đọc sơ đồ theo ba tầng:
 
 1. **Trước khi nghĩ.** `session-policy.py` và `prompt-intake.py` đưa quy ước vào
    context. Cả hai chỉ *nhắc*; không cái nào phán prompt thuộc lớp nào.
-2. **Trước khi giao việc.** `flow-gate.py` giữ cửa ra của điều phối: không đọc
-   file thật thì không được lập plan hay gọi subagent, và gọi ai thì phải khớp
-   nhãn plan đã ghi.
-3. **Trước khi sửa và trước khi trả lời.** `plan-gate.py` giữ cửa ghi file;
-   `verifier` giữ cửa vào `builder`; `no-fake-pass.py` soi lượt trả về của
-   `builder`, chặn báo cáo pass không kèm output thật.
+2. **Trước khi giao việc.** Không có hook nào ở đây. `verifier` là cổng vào
+   `builder`, nhưng nó là cổng do **bạn** gọi, không phải cổng do runtime ép.
+3. **Sau khi làm xong.** `skill-nudge.py` gợi ý đúc kết skill, `memory-nudge.py`
+   gợi ý lưu memory, `gloss-gate.py` ghi log token nghi bịa nghĩa. Cả ba đều chỉ
+   gợi ý.
 
 ## Bên trong có gì
 
 | Thành phần | Nội dung |
 |---|---|
 | `agents/` | Năm subagent: `Explore` (haiku), `architect` và `critic` (opus), `builder` và `verifier` (sonnet) |
-| `hooks/` | Năm hook Python đang chạy, xem bảng ở mục dưới. `gloss-gate.py` còn trong thư mục nhưng đã gỡ khỏi `hooks.json` |
+| `hooks/` | Tám hook Python. Năm cái chạy mặc định (không chặn), ba cái là gate tuỳ chọn chưa đăng ký trong `hooks.json`. Xem bảng ở mục dưới |
 | `skills/verify-loop/` | Skill chạy vòng verify: build, typecheck, lint, test |
 | `policy/common.md` | Luật áp cho mọi agent. Vào cả phiên chính lẫn subagent |
 | `policy/supervisor.md` | Luật điều phối. Chỉ vào phiên chính |
@@ -133,53 +132,75 @@ codebase. `critic` trả lời câu hỏi "lập luận có chặt không" nên 
 tool, và chỉ được xem câu hỏi gốc cùng câu trả lời chứ không xem quá trình suy
 luận — đó là điều giữ cho nó độc lập.
 
-### Năm hook, năm chốt tất định
+### Năm hook chạy mặc định — không cái nào chặn
 
-Prompt chỉ làm giảm xác suất agent làm sai. Hook mới là thứ chặn thật, bằng exit
-code.
+Prompt chỉ làm giảm xác suất agent làm sai. Bản mặc định của kit **không** dựng
+cổng chặn; nó đặt luật vào đúng chỗ và để lại dấu vết khi thấy tín hiệu nghi ngờ.
+
+| Hook | Chạy lúc | Làm gì | Chặn? |
+|---|---|---|---|
+| `session-policy.py` | Mở phiên, và mỗi khi một subagent khởi động | Đưa policy vào context — plugin không đọc được `CLAUDE.md` nên đây là đường duy nhất. Phiên chính nhận luật điều phối, subagent nhận luật thực thi | Không |
+| `prompt-intake.py` | Người dùng gửi prompt | Nhắc quy ước vì policy đã trôi xa trong context. Chỉ *nhắc*, không phán lớp | Không |
+| `gloss-gate.py` | `Stop`, `SubagentStop` | Ghi log token viết tắt bị mở rộng nghĩa mà chữ cái đầu không khớp. Đăng ký sẵn ở chế độ `GLOSS_GATE=warn` | Không, chỉ ghi `~/.claude/gloss-gate.log` |
+| `memory-nudge.py` | Sau `Write`/`Edit`, và `Stop` | Gợi ý lưu memory khi lượt có tín hiệu quyết định/điều chỉnh mà chưa thấy ghi vào `memory/*.md` | Không |
+| `skill-nudge.py` | `builder` kết thúc | Gợi ý cân nhắc đúc kết `SKILL.md` khi task chạm ≥3 file và đã `VERDICT: READY`. Không tự ghi vào `skills/` | Không |
+
+Cả năm đều **fail-open**: không đọc được dữ liệu đầu vào thì trả `exit 0`.
+
+Hai ngưỡng của `skill-nudge` không phải số mới đặt ra — chúng lấy đúng ngưỡng đã
+có: "≥3 file" là ngưỡng escalation trong `agents/builder.md`, `VERDICT: READY` là
+output contract của skill `verify-loop`.
+
+### Bật lại ba gate
+
+`flow-gate.py`, `plan-gate.py` và `no-fake-pass.py` nằm trong `hooks/` nhưng
+**không** có trong `hooks.json`. Chúng chặn thật bằng `exit 2`:
 
 | Hook | Chạy lúc | Chặn cái gì |
 |---|---|---|
-| `session-policy.py` | Mở phiên, và mỗi khi một subagent khởi động | Policy bị bỏ qua vì plugin không đọc được `CLAUDE.md`. Phiên chính nhận luật điều phối, subagent nhận luật thực thi |
-| `prompt-intake.py` | Người dùng gửi prompt | Quên quy ước vì policy đã ở quá xa trong context. Chỉ *nhắc*, không phán lớp |
-| `flow-gate.py` | Trước `Read`/`Grep`/`Glob`/`Bash`/`Agent`/`ExitPlanMode`/`Edit`/`Write` | Lập plan hoặc giao việc khi lượt này chưa đọc file nào; giao việc bằng prompt cụt; gọi agent không khớp nhãn plan; **giao builder khi chưa qua `verifier` hoặc prompt chưa chứa plan**; **builder ghi file khi chưa được duyệt** |
+| `flow-gate.py` | Trước `Read`/`Grep`/`Glob`/`Bash`/`Agent`/`ExitPlanMode`/`Edit`/`Write` | Lập plan hoặc giao việc khi lượt này chưa đọc file nào; giao việc bằng prompt cụt; gọi agent không khớp nhãn plan; giao `builder` khi chưa qua `verifier` hoặc prompt chưa chứa plan; `builder` ghi file khi chưa được duyệt |
 | `plan-gate.py` | Trước khi ghi file | Nhảy vào sửa code khi chưa có plan |
 | `no-fake-pass.py` | `builder` kết thúc | Báo "đã pass" mà không kèm lệnh đã chạy và output thật |
 
-Cả năm đều **fail-open**: khi không đọc được dữ liệu đầu vào thì trả `exit 0`,
-tức là không chặn. Thà bỏ lọt còn hơn chặn oan rồi làm nghẽn phiên làm việc.
+Bật bằng cách thêm chúng vào `hooks/hooks.json`. Mẫu đăng ký đầy đủ của bản 1.0.2
+lấy ra bằng:
 
-`no-fake-pass` chặn **tối đa một lần** mỗi lượt dừng. Khi hook trả `exit 2`, nền tảng
-cho subagent chạy thêm một lượt và đánh dấu lượt đó bằng `stop_hook_active`. Hook đọc
-cờ này rồi cho qua, nếu không thì agent nào không đưa nổi bằng chứng sẽ quay vòng vô
-hạn. Đây là điều đã đo bằng hook thăm dò chạy thật, không phải suy từ tài liệu.
+```bash
+git show bcf22e2:hooks/hooks.json
+```
 
-`flow-gate` tính `Bash` là khảo sát chỉ khi lệnh là lệnh đọc (`cat`, `sed`,
-`grep`, `git log`…), kể cả khi nó đứng sau `&&`. Nhiều phiên đọc code bằng shell
-chứ không bằng tool `Read`; không tính thì cổng chặn oan đúng lối làm việc đó.
+Ba biến `FLOW_GATE=off`, `PLAN_GATE=off`, `NOFAKEPASS_AGENTS=` tắt lại từng cái
+mà không cần sửa file.
+
+**Vì sao mặc định tắt.** Bản 1.0.2 bật cả ba, và đo thật ngày 07/09/2026 cho thấy
+hai trong ba cái đang hỏng theo hai hướng ngược nhau:
+
+- `flow-gate` khoá dấu duyệt theo `prompt_id`. `prompt_id` **không bắc cầu** qua
+  ranh giới cha–con một khi phiên chính đã đóng lượt trước lúc `builder` thực thi
+  `Edit`, nên `builder` luôn thấy `builder_ok` không tồn tại và **bị chặn oan**
+  dù parent đã làm đúng vòng duyệt.
+- `no-fake-pass` đọc `agent_type` ở top-level payload `SubagentStop`, nhưng giá
+  trị đó là **chuỗi rỗng** — matcher lọc đúng, chỉ field là rỗng. Hook fail-open,
+  tức là **không bao giờ bắn**.
+
+Bản 1.0.3 sửa cả hai (`hooks/flow-gate.py` khoá theo `session_id`;
+`hooks/no-fake-pass.py` suy tên agent từ matcher khi chỉ theo dõi đúng một agent),
+nhưng để mặc định tắt: bản sửa chưa chạy đủ lâu trên việc thật để đáng bật cho cả
+team. Ai muốn siết thì bật và báo lại kết quả.
 
 ### Vòng duyệt trước khi builder được ghi file
 
-`builder` không tự lập plan cho mình, và cũng không được ghi file chỉ vì phiên
-chính đã có plan nào đó. Thứ tự bắt buộc, cả ba mắt xích đều cưỡng chế được:
+`builder` không tự lập plan cho mình. Thứ tự bắt buộc:
 
-1. **Parent lập plan** cho việc sắp giao, rồi nhúng thẳng vào prompt giao việc.
-   Cổng đòi ít nhất `FLOW_GATE_MIN_STEPS` bước (mặc định 2) và ít nhất một dòng
-   tiêu chí nghiệm thu.
-2. **`verifier` đối chiếu plan với code thật.** Cổng đòi một lời gọi `verifier`
-   trong cùng lượt trước khi `builder` được spawn. Đây là chỗ luật "verifier
-   chạy trước builder" chuyển từ văn bản sang cưỡng chế.
-3. **Parent chốt** bằng chính lời gọi spawn. Chỉ khi bước 1 và 2 đã xong thì
-   lệnh `Edit`/`Write` của `builder` mới được cho qua.
+1. **Parent lập plan** cho việc sắp giao, rồi nhúng thẳng vào prompt giao việc:
+   ít nhất 2 bước, và ít nhất một dòng tiêu chí nghiệm thu.
+2. **`verifier` đối chiếu plan với code thật.** `VERDICT: BLOCK` thì sửa plan,
+   không giao `builder`.
+3. **Parent chốt** bằng chính lời gọi spawn.
 
-Cổng phân biệt được lệnh ghi của `builder` với lệnh ghi của phiên chính nhờ
-trường `agent_type` có trong payload `PreToolUse` của subagent.
-
-Nới: `FLOW_GATE_REQUIRE_VERIFIER=0` bỏ bước 2, `FLOW_GATE_MIN_STEPS` hạ ngưỡng
-bước, `FLOW_GATE=off` tắt hẳn.
-
-`gloss-gate.py` vẫn nằm trong thư mục nhưng **không còn được đăng ký** trong
-`hooks.json`. Lý do ở mục "Những giới hạn đã biết".
+Ở bản mặc định, cả ba mắt xích là **kỷ luật của người điều phối**, không có hook
+nào cưỡng chế. Bỏ bước 2 thì không có gì báo cho bạn biết. Muốn biến nó thành
+ràng buộc thật thì bật `flow-gate` theo mục trên.
 
 ## Policy: đưa vào context bằng cách nào
 
@@ -237,8 +258,14 @@ chạy `claude`.
 | `PLAN_GATE_PLAN_TOOLS` | — | Thêm tool được tính là "đã có plan", cách nhau bằng dấu phẩy |
 | `NOFAKEPASS_AGENTS` | `builder` | Agent nào bị soi khi khẳng định "đã pass" |
 | `NOFAKEPASS_STRICT` | — | Đặt `1` để chặn cả khi không nhận diện được agent nào đang chạy |
-| `GLOSS_GATE` | `block` | `warn` là chỉ ghi log, `off` là tắt hẳn |
+| `GLOSS_GATE` | `warn` (đặt sẵn trong `hooks.json`) | `block` là chặn thật, `off` là tắt hẳn. Xem "Những giới hạn đã biết" trước khi đặt `block` |
 | `GLOSS_MIN_LEN` | 3 | Độ dài tối thiểu của viết tắt mới bị soi |
+| `MEMORY_NUDGE` | — | Đặt `off` để tắt gợi ý lưu memory |
+| `SKILL_NUDGE` | — | Đặt `off` để tắt gợi ý đúc kết skill |
+| `SKILLNUDGE_AGENTS` | `builder` | Agent nào được soi để gợi ý đúc kết skill |
+| `FLOW_GATE` | — | Đặt `off` để tắt flow gate, nếu bạn đã tự bật nó |
+| `FLOW_GATE_MIN_STEPS` | 2 | Số bước tối thiểu prompt giao `builder` phải có |
+| `FLOW_GATE_REQUIRE_VERIFIER` | — | Đặt `0` để bỏ yêu cầu `verifier` chạy trước `builder` |
 | `POLICY_HOOK` | — | Đặt `off` để không đưa policy vào context |
 | `POLICY_FILE` | — | Trỏ tới file policy khác |
 
@@ -288,9 +315,11 @@ log hoặc trong log hook trên máy:
 | `gloss-gate` chặn vì toán tử so sánh bị coi là dấu gán nghĩa | Oan | Sửa: dấu gán phải đứng độc lập, không phải phần của `==`, `=>`, `!=` |
 | `gloss-gate` chặn ba lần liên tiếp một báo cáo, trong đó có `VERIFY`, `POST`, `IDE` | Oan | Không vá nữa. Gỡ hẳn khỏi `hooks.json`: ba lần vá trước cho thấy đây là lỗi cơ chế, không phải lỗi danh sách miễn trừ |
 | `no-fake-pass` cho qua mọi lượt của `builder` suốt nhiều tháng | Không bắn, và không ai biết | `agent_type` runtime là `agent-kit:builder`, không khớp `{"builder"}`. Sửa so khớp theo tên trần |
+| `no-fake-pass` VẪN không bắn sau lần sửa trên (đo 07/09/2026) | Không bắn, lần thứ hai | `agent_type` ở top-level payload là **chuỗi rỗng**, nên so khớp kiểu gì cũng trượt. Sửa: khi chỉ theo dõi đúng một agent thì tin matcher đã lọc đúng, không fail-open nữa |
+| `flow-gate` chặn `builder` ghi file dù parent đã qua đủ vòng duyệt (đo 07/09/2026) | Oan, 100% số lần | Dấu duyệt khoá theo `prompt_id`, mà `prompt_id` không bắc cầu qua ranh giới cha–con khi phiên chính đã đóng lượt. Sửa: khoá `verified`/`builder_ok` theo `session_id`, đúng pattern `plan-gate.py` vốn không dính lỗi này |
 
 Mỗi lần cắn oan đều thành fix kèm test hồi quy, và không lần nào gate bị nới ra
-cho dễ chịu. Nhưng hai dòng cuối bảng dạy một bài khác, đắt hơn:
+cho dễ chịu. Nhưng bốn dòng cuối bảng dạy một bài khác, đắt hơn:
 
 - **Vá ba lần rồi vẫn oan thì vấn đề nằm ở cơ chế, không nằm ở danh sách miễn
   trừ.** `gloss-gate` được vá ba lần trước khi có ai hỏi liệu "so chữ cái đầu" có
@@ -300,6 +329,13 @@ cho dễ chịu. Nhưng hai dòng cuối bảng dạy một bài khác, đắt h
   nào, nên nó chết âm thầm rất lâu trong khi tài liệu vẫn gọi nó là "chốt tất định
   duy nhất". Từ đó rút ra: cổng nào cũng cần một cách kiểm rằng **nó vẫn đang bắn**,
   không chỉ kiểm rằng nó chặn đúng.
+- **Sửa một gate rồi tin là xong, không đo lại, là cách nó chết lần thứ hai.**
+  `no-fake-pass` được sửa một lần vì tên agent có tiền tố, và tài liệu ghi là đã
+  khắc phục. Mãi tới lần đo 07/09 mới lộ ra nó vẫn im, vì nguyên nhân thật nằm ở
+  chỗ khác: field rỗng chứ không phải sai tên. Cả hai lần đều "sửa đúng thứ mình
+  nhìn thấy", và chỉ lần đo bằng payload thật mới nói được thứ nào thực sự sai.
+- **Đó là lý do bản 1.0.3 để ba gate mặc định tắt.** Một cổng vừa được sửa chưa
+  chạy đủ lâu trên việc thật thì chưa đủ tư cách chặn việc của cả team.
 
 ### Chưa đo được — và tại sao chưa
 
@@ -321,7 +357,8 @@ hơn**, chứ không phải tốt hơn.
 |---|---|---|
 | Khối policy | 106 dòng, 5.877 ký tự, một lần mỗi phiên | Vào context ở `SessionStart`, không phải mỗi lượt |
 | Khối nhắc quy ước | 417 ký tự, khoảng 119 token mỗi lượt | Đo bằng cách chạy `hooks/prompt-intake.py` với payload mẫu |
-| Ba hook chặn | Không tốn token | Chúng chỉ đọc payload và trả exit code |
+| Ba hook chặn (nếu bạn tự bật) | Không tốn token | Chúng chỉ đọc payload và trả exit code |
+| `gloss-gate` / `memory-nudge` / `skill-nudge` | Không tốn token khi im lặng | `memory-nudge` và `skill-nudge` chỉ tốn token ở lượt chúng thật sự gợi ý |
 
 Quy đổi ký tự sang token dùng ước lượng 3,5 ký tự một token cho văn bản Việt–Anh
 trộn. Đó là **ước lượng**, không phải đo bằng tokenizer thật: con số ký tự là đếm
@@ -329,7 +366,7 @@ trộn. Đó là **ước lượng**, không phải đo bằng tokenizer thật:
 
 ## Những giới hạn đã biết
 
-**`gloss-gate` đã bị gỡ khỏi `hooks.json`, và đây là lý do.** Cơ chế của nó là so
+**`gloss-gate` chạy ở chế độ `warn`, không phải `block`, và đây là lý do.** Cơ chế của nó là so
 chữ cái đầu của cụm từ đứng sau dấu hai chấm với token viết hoa đứng trước. Cơ chế
 đó tất định về mặt tính toán nhưng **không tương quan** với việc có bịa nghĩa hay
 không, nên nó bắt nhầm mọi câu tiếng Việt kỹ thuật có dạng `TOKEN` + dấu hai chấm
@@ -339,16 +376,26 @@ token `VERIFY` — tức là hook chặn đúng câu `CHƯA VERIFY: <lý do>` m�
 Kit phạt sự trung thực. Các lần chặn khác gồm `POST`, `GET`, `IDE`, `FINDINGS` —
 đều là heading hoặc câu thường.
 
-File vẫn nằm trong repo. Bật lại bằng cách thêm nó vào `hooks.json`, và nên đặt
-`GLOSS_GATE=warn` nếu làm vậy. Việc chống bịa nghĩa viết tắt đã chuyển sang
-`verifier`, nơi có tool để tra glossary thật thay vì đoán qua chữ cái đầu.
+Bản 1.0.2 gỡ hẳn nó khỏi `hooks.json`. Bản 1.0.3 đăng ký lại, nhưng ghim
+`GLOSS_GATE=warn` ngay trong `hooks.json`: hook ghi log vào
+`~/.claude/gloss-gate.log` để bạn còn thấy tín hiệu, và không chặn ai cả. Muốn nó
+chặn thật thì `export GLOSS_GATE=block` — đọc lại đoạn trên trước khi làm vậy.
+Việc chống bịa nghĩa viết tắt vẫn thuộc về `verifier`, nơi có tool để tra glossary
+thật thay vì đoán qua chữ cái đầu.
+
+**Ba gate mặc định tắt.** `flow-gate`, `plan-gate`, `no-fake-pass` không có trong
+`hooks.json`. Bản mặc định vì thế **không chặn** bất cứ điều gì bằng exit code:
+mọi luật trong `policy/` phụ thuộc vào việc người điều phối tự giữ. Lý do và cách
+bật lại ở mục "Bật lại ba gate".
 
 **`no-fake-pass` chỉ nhận bằng chứng ở ba dạng:** block code, dòng bắt đầu bằng
 `$ <lệnh>`, hoặc câu ghi rõ `CHƯA VERIFY`. Nhắc tên lệnh bằng inline backtick
 không được tính là bằng chứng.
 
-**Policy có tới được subagent hay không thì CHƯA VERIFY.** Hook chạy ở
-`SessionStart`, và điều đã kiểm được là nó tới được phiên chính. Subagent là một
+**Policy có tới được subagent hay không thì CHƯA VERIFY.** Hook có chạy ở
+`SubagentStart` và test hộp đen xác nhận nó **sinh ra** đúng khối `worker.md`
+(test 22, 25, 26). Nhưng thứ chưa kiểm được là runtime có thật sự **giao** khối
+đó vào context của subagent hay không. Subagent là một
 context riêng, nên rất có thể nó không nhận khối policy này — khác với bản cài thủ
 công, nơi `CLAUDE.md` tới được mọi agent. Bù lại, các luật cốt lõi đã được viết
 thẳng vào từng file trong `agents/`, nên subagent không đi làm mà tay trắng. Dù
@@ -361,6 +408,7 @@ không đo được agent có thật sự ngừng bịa hay không.
 
 ```bash
 claude plugin validate . --strict   # manifest và component của plugin
+python3 tests/test_hooks.py         # test hộp đen cho hooks/*.py, chạy hook thật
 ```
 
 Bộ kiểm ngữ nghĩa 145 check và đối chứng âm 30 defect là công cụ nội bộ, không
