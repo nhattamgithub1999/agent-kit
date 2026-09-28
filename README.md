@@ -10,7 +10,7 @@ buộc agent làm việc theo ba nguyên tắc:
 - **Review lại.** Việc làm xong phải đi qua vòng verify (build, typecheck, lint,
   test) và qua cổng phản biện.
 
-Phiên bản: **v1.0.3**. Profile mặc định: DOCTRINE — plugin tiêm luật và ghi
+Phiên bản: **v1.0.4** (ghim `architect`, `critic`, `orchestrator` vào Opus 5.5 — `claude-opus-5-5`). Profile mặc định: DOCTRINE — plugin tiêm luật và ghi
 log, **không hook nào chặn bằng exit code**. Ba hook chặn vẫn đi kèm repo, bật
 bằng tay, xem mục "Bật lại ba gate".
 
@@ -106,7 +106,7 @@ khoá nào; sơ đồ này là sơ đồ thật, không phải sơ đồ mong mu
 
 | Thành phần | Nội dung |
 |---|---|
-| `agents/` | Năm subagent: `Explore` (haiku), `architect` và `critic` (opus), `builder` và `verifier` (sonnet) |
+| `agents/` | Năm subagent: `Explore` (haiku), `architect` và `critic` (Opus 5.5), `builder` và `verifier` (sonnet) |
 | `hooks/` | Tám hook Python. Năm cái chạy mặc định (không chặn), ba cái là gate tuỳ chọn chưa đăng ký trong `hooks.json`. Xem bảng ở mục dưới |
 | `skills/verify-loop/` | Skill chạy vòng verify: build, typecheck, lint, test |
 | `policy/common.md` | Luật áp cho mọi agent. Vào cả phiên chính lẫn subagent |

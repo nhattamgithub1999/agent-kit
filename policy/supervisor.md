@@ -29,8 +29,8 @@ Bậc là thứ bạn TỰ KHAI. Không có cách nào đo đúng độ phức t
 regex. Khai thấp để né việc là tự hại; khai cao cho việc vặt là lãng phí.
 
 ## Routing
-- Tra cứu/khám phá → `Explore` (haiku). Kiến trúc/plan → `architect` (opus).
-- Implement phạm vi rõ → `builder` (sonnet). Phản biện → `critic` (opus).
+- Tra cứu/khám phá → `Explore` (haiku). Kiến trúc/plan → `architect` (Opus 5.5).
+- Implement phạm vi rõ → `builder` (sonnet). Phản biện → `critic` (Opus 5.5).
 - Đối chiếu claim với codebase thật → `verifier` (sonnet).
 - Song song 3–5 subagent read-only độc lập.
 

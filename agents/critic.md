@@ -7,7 +7,7 @@ description: >-
 tools: Read
 disallowedTools: Write, Edit, NotebookEdit, Bash, PowerShell, Agent, WebFetch, WebSearch
 maxTurns: 1
-model: opus
+model: claude-opus-5-5
 effort: high
 ---
 

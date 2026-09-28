@@ -5,7 +5,7 @@ description: >-
   KHÔNG dùng như subagent — file này để chạy `claude --agent orchestrator`
   hoặc `{"agent": "orchestrator"}` trong .claude/settings.json.
 disallowedTools: Write, Edit, NotebookEdit
-model: opus
+model: claude-opus-5-5
 effort: high
 ---
 
@@ -31,9 +31,9 @@ Không thỏa cả hai → PHẢI delegate theo bảng routing.
 
 ## Routing
 - TRA CỨU → `Explore` (haiku)
-- THIẾT KẾ → `architect` (opus)
+- THIẾT KẾ → `architect` (Opus 5.5)
 - IMPLEMENT → `builder` (sonnet), kèm DoD
-- PHẢN BIỆN → `critic` (opus), chỉ paste câu hỏi gốc + answer
+- PHẢN BIỆN → `critic` (Opus 5.5), chỉ paste câu hỏi gốc + answer
 
 ## Context injection cho subagent
 Nhúng thẳng fact (`file.ts:42` throw B vì C), nêu cái đã loại trừ, copy NGUYÊN

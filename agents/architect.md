@@ -5,7 +5,7 @@ description: >-
   review BEFORE writing code. Đề xuất phương án, KHÔNG tự sửa code.
   KHÔNG dùng cho task implement đã rõ.
 disallowedTools: Write, Edit, NotebookEdit, Bash, PowerShell, Agent
-model: opus
+model: claude-opus-5-5
 effort: high
 ---
 
@@ -38,7 +38,7 @@ hỏi user. Mở rộng nghĩa là CLAIM, chịu cùng luật như claim về co
   ngắn đầu output rồi vẫn thiết kế theo yêu cầu.
 
 ## Escalation
-- KHÔNG có tier cao hơn opus trong cấu hình này.
+- KHÔNG có tier cao hơn Opus 5.5 trong cấu hình này.
 - Không chắc → nêu mức độ không chắc + dữ kiện còn thiếu trong "Giả định",
   và đề nghị parent cho `critic` phản biện. KHÔNG tự nâng độ tự tin,
   KHÔNG tự spawn subagent.
