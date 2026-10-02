@@ -1,134 +1,206 @@
 #!/usr/bin/env python3
 """
-PostToolUse + Stop hook — nhắc lưu memory khi phiên có tín hiệu quyết định/điều
-chỉnh đáng nhớ nhưng chưa thấy ghi vào memory/*.md.
+PostToolUse + Stop hook — kích hoạt tự học: khi lượt vừa xong có TÍN HIỆU đáng học
+mà chưa ghi memory, gợi ý chạy skill `learn`. CHỈ GỢI Ý, không chặn, không tự ghi.
 
-VẤN ĐỀ NÓ GIẢI:
-  Hạ tầng memory (type user/feedback/project/reference + MEMORY.md index) đã
-  có sẵn, nhưng không có gì NHẮC dùng nó — phiên có correction/quyết định rồi
-  trôi qua, không ai ghi lại. Đối chiếu hermes-agent (NousResearch): họ có
-  "agent-curated memory with periodic persistence nudges" — đây là bản tối
-  giản của ý tưởng đó, CHỈ GỢI Ý, không tự ghi, không chặn (khớp luật đã có:
-  chỉ lưu memory khi user yêu cầu hoặc tín hiệu rõ).
+v2 (2026-09-23): thay regex trên câu trả lời của model bằng tín hiệu đọc từ
+transcript của CHÍNH lượt hiện tại:
+  - correction : prompt của user có dấu hiệu sửa hướng / nêu quy ước.
+  - fixed      : CÙNG một lệnh verify (build/test/lint/typecheck) is_error rồi chạy lại OK
+                 (fail/pass lấy từ tool_result.is_error trong transcript).
+  - lesson     : report subagent (tool Agent) có mục "### Bài học" không rỗng.
+Lượt đã ghi vào */memory/*.md hoặc */learnings/*.md → im lặng. Mỗi lượt gợi ý tối đa 1 lần.
+Bằng chứng giữ cơ chế additionalContext ở Stop (đo 2026-09-23 trên transcript): sau
+gợi ý của v1, model CHẠY TIẾP NGAY trong cùng lượt 88/92 lần — không chen vào task sau.
 
-CƠ CHẾ (dual-event single-script, giống session-policy.py):
-  PostToolUse (matcher Write|Edit) -> nếu path ghi có chứa "/memory/" (đúng
-    thư mục memory của dự án) -> đánh dấu marker cho session này, IM LẶNG.
-  Stop (phiên chính, không matcher) -> nếu session CHƯA có marker VÀ
-    last-message/transcript khớp regex tín hiệu quyết định/điều chỉnh ->
-    in additionalContext dạng GỢI Ý (không exit 2, không ép làm gì).
+CƠ CHẾ:
+  PostToolUse (matcher Write|Edit): path chứa /memory/ hoặc /learnings/ → chạm marker;
+    nếu là /learnings/ → chạy check.py, có ERROR thì báo model (additionalContext).
+  Stop: stop_hook_active → thoát. Đọc transcript từ prompt thật cuối cùng của user.
 
-CHỈNH:
-  MEMORY_NUDGE=off    tắt hẳn.
-
-FAIL-OPEN: stdin không phải JSON; thiếu session_id; không ghi/đọc được state
--> exit 0, không chặn gì, không crash.
+CHỈNH:  MEMORY_NUDGE=off tắt hẳn;  MEMORY_NUDGE_STATE=<dir>, MEMORY_NUDGE_LOG=<file> đổi chỗ ghi;
+        LEARN_CHECK=<file> đổi check.py (mặc định ../skills/learn/scripts/check.py cạnh hooks/).
+FAIL-OPEN: mọi lỗi parse/IO → exit 0, không in gì.
 """
+import datetime as dt
+import hashlib
 import json
 import os
 import pathlib
 import re
+import subprocess
 import sys
 import tempfile
 
-STATE = pathlib.Path(tempfile.gettempdir()) / "agent-kit-memory"
-LOG = pathlib.Path.home() / ".claude" / "memory-nudge.log"
+STATE = pathlib.Path(os.environ.get("MEMORY_NUDGE_STATE") or
+                     pathlib.Path(tempfile.gettempdir()) / "agent-kit-memory")
+# hooks/ và skills/ nằm cạnh nhau ở cả plugin root lẫn ~/.claude
+CHECK = pathlib.Path(os.environ.get("LEARN_CHECK") or
+                     pathlib.Path(__file__).resolve().parent.parent / "skills" / "learn" / "scripts" / "check.py")
+LOG = pathlib.Path(os.environ.get("MEMORY_NUDGE_LOG") or pathlib.Path.home() / ".claude" / "memory-nudge.log")
 
-CUE = re.compile(
-    r"(từ giờ|từ nay|lần sau|luôn luôn|luôn phải|"
-    r"quy tắc|quy ước|chốt (lại|vậy)|nhớ (giúp|là|rằng)|"
-    r"ghi nhớ|correction|feedback)",
+MEMORY_PATH = re.compile(r"/(memory|learnings)/[^\s\"']*\.md")
+CORRECTION = re.compile(
+    r"(từ giờ|từ nay|lần sau|sai rồi|nhầm rồi|không đúng|không cần thiết|"
+    r"nhớ (giúp|là|rằng)|ghi nhớ|rút kinh nghiệm|quy ước|luôn luôn)",
     re.I,
+)  # đo 2026-09-23 trên 495 prompt thật: bắt 1.8%; vế "^đừng/không" bị bỏ vì báo nhầm
+VERIFY_CMD = re.compile(
+    r"\b(dotnet (build|test)|npm (run )?(test|build|lint|typecheck)|pnpm (run )?(test|build|lint)|"
+    r"yarn (test|build|lint)|pytest|python3? -m (pytest|unittest)|tsc\b|go (test|build|vet)|"
+    r"cargo (test|build|clippy)|mvn|gradle|eslint|ruff|mypy|jest|vitest|test_\w+\.py)"
 )
+LESSON = re.compile(r"###\s*Bài học[^\n]*\n+\s*[-*]\s*(?!\(?\s*(không|chưa|none)\b)\S", re.I)
+FIXED = "lỗi verify đã sửa (fail → pass)"
+SUB_LESSON = "subagent báo bài học"
+NOT_A_PROMPT = ("<local-command", "<command-", "<task-notification", "<system-reminder",
+                "[Request interrupted")
 
 
 def log(msg: str) -> None:
     try:
         LOG.parent.mkdir(parents=True, exist_ok=True)
         with LOG.open("a", encoding="utf-8") as f:
-            f.write(msg.rstrip() + "\n")
+            f.write(f"{dt.datetime.now().isoformat(timespec='seconds')} {msg.rstrip()}\n")
     except OSError:
         pass
 
 
-def walk_strings(obj, depth=0):
-    if depth > 8:
-        return
-    if isinstance(obj, str):
-        yield obj
-    elif isinstance(obj, dict):
-        for v in obj.values():
-            yield from walk_strings(v, depth + 1)
-    elif isinstance(obj, list):
-        for v in obj:
-            yield from walk_strings(v, depth + 1)
+def user_text(rec) -> str:
+    """Text của một prompt THẬT do user gõ; "" nếu là tool_result/meta/lệnh hệ thống."""
+    if rec.get("type") != "user" or rec.get("isMeta"):
+        return ""
+    c = (rec.get("message") or {}).get("content")
+    if isinstance(c, list):
+        if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
+            return ""
+        c = "\n".join(b.get("text", "") for b in c if isinstance(b, dict))
+    if not isinstance(c, str) or not c.strip() or c.lstrip().startswith(NOT_A_PROMPT):
+        return ""
+    return c
 
 
-def read_transcript(payload) -> str:
-    for s in walk_strings(payload):
-        if s.endswith(".jsonl") and os.path.isfile(s):
-            try:
-                return pathlib.Path(s).read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                pass
-    return ""
+def current_turn(transcript: str):
+    recs = []
+    try:
+        with open(transcript, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    recs.append(json.loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        return None, "", []
+    start = max((i for i, r in enumerate(recs) if user_text(r)), default=-1)
+    if start < 0:
+        return None, "", []
+    return recs[start], user_text(recs[start]), recs[start + 1:]
 
 
-def last_message(payload) -> str:
-    if isinstance(payload, dict):
-        for k in ("last_assistant_message", "lastAssistantMessage"):
-            v = payload.get(k)
-            if isinstance(v, str) and v.strip():
-                return v
-            if isinstance(v, dict):
-                parts = [b.get("text", "") for b in (v.get("content") or [])
-                         if isinstance(b, dict)]
-                if any(parts):
-                    return "\n".join(parts)
-    return ""
+def signals(prompt: str, turn: list):
+    uses, results = {}, {}
+    for r in turn:
+        for b in ((r.get("message") or {}).get("content") or []):
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "tool_use":
+                uses[b.get("id")] = b
+            elif b.get("type") == "tool_result":
+                results[b.get("tool_use_id")] = b
+    found, wrote, failed = [], False, {}
+    if CORRECTION.search(prompt):
+        found.append("user sửa hướng / nêu quy ước")
+    for uid, u in uses.items():
+        inp = u.get("input") or {}
+        if u.get("name") in ("Write", "Edit") and MEMORY_PATH.search(str(inp.get("file_path", ""))):
+            wrote = True
+        res = results.get(uid) or {}
+        if u.get("name") == "Bash" and VERIFY_CMD.search(inp.get("command", "")):
+            key = normalize(inp.get("command", ""))
+            if res.get("is_error"):
+                failed[key] = True
+            elif failed.get(key) and FIXED not in found:
+                found.append(FIXED)
+        if u.get("name") == "Agent":
+            content = res.get("content")
+            text = content if isinstance(content, str) else "\n".join(
+                x.get("text", "") for x in (content or []) if isinstance(x, dict))
+            if LESSON.search(text) and SUB_LESSON not in found:
+                found.append(SUB_LESSON)
+    return found, wrote
 
 
-def marker_path(session_id: str) -> pathlib.Path:
-    return STATE / session_id / "written"
+def normalize(cmd: str) -> str:
+    """Cùng một lệnh verify = cùng chuỗi sau khi bỏ `cd <dir> &&` đầu và gộp khoảng trắng."""
+    cmd = re.sub(r"^\s*(cd\s+\S+\s*&&\s*)+", "", cmd)
+    return " ".join(cmd.split())
+
+
+def marker(session_id: str, name: str) -> pathlib.Path:
+    return STATE / session_id / name
 
 
 def handle_post_tool_use(payload, session_id: str) -> int:
-    tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
-    if not isinstance(tool_input, dict):
+    path = str((payload.get("tool_input") or {}).get("file_path", ""))
+    if not MEMORY_PATH.search(path):
         return 0
-    for s in walk_strings(tool_input):
-        if "/memory/" in s and s.endswith(".md"):
-            try:
-                p = marker_path(session_id)
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.touch()
-                log(f"MARK session={session_id} path={s}")
-            except OSError:
-                pass
-            break
+    try:
+        p = marker(session_id, "written")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.touch()
+    except OSError:
+        pass
+    # Ghi vào kho learnings → chạy check.py ngay; có ERROR thì báo model sửa trong cùng lượt.
+    root = next((pathlib.Path(path[:m.end()]) for m in [re.search(r".*/learnings(?=/)", path)] if m), None)
+    if root is None or not CHECK.exists():
+        return 0
+    try:
+        r = subprocess.run([sys.executable, str(CHECK), "--root", str(root)],
+                           capture_output=True, text=True, timeout=8)
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    errs = [l for l in r.stdout.splitlines() if l.startswith("ERROR:")]
+    if errs:
+        log(f"CHECK-ERROR session={session_id} n={len(errs)}")
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": "check.py báo lỗi kho learnings — sửa ngay:\n" + "\n".join(errs[:8]),
+        }}, ensure_ascii=False))
     return 0
 
 
 def handle_stop(payload, session_id: str) -> int:
-    if marker_path(session_id).exists():
+    if payload.get("stop_hook_active"):
         return 0
-
-    text = last_message(payload) or read_transcript(payload) or "\n".join(walk_strings(payload))
-    if not text.strip() or not CUE.search(text):
+    start_rec, prompt, turn = current_turn(str(payload.get("transcript_path") or ""))
+    if start_rec is None:
         return 0
-
-    msg = (
-        "Phiên này có thể có quyết định/điều chỉnh đáng lưu "
-        "vào memory (user/feedback/project/reference) nhưng chưa thấy ghi. "
-        "Cân nhắc lưu nếu còn giá trị cho phiên sau."
-    )
-    log(f"NUDGE session={session_id}")
-    print(json.dumps({
-        "hookSpecificOutput": {
-            "hookEventName": "Stop",
-            "additionalContext": msg,
-        }
-    }, ensure_ascii=False))
+    turn_id = str(start_rec.get("uuid") or hashlib.sha1(prompt.encode()).hexdigest()[:12])
+    nudged = marker(session_id, f"nudged-{turn_id}")
+    if nudged.exists():
+        return 0
+    found, wrote = signals(prompt, turn)
+    written = marker(session_id, "written")
+    try:
+        ts = dt.datetime.fromisoformat(str(start_rec.get("timestamp", "")).replace("Z", "+00:00")).timestamp()
+        if written.exists() and written.stat().st_mtime >= ts:
+            wrote = True
+    except ValueError:
+        pass
+    if not found or wrote:
+        return 0
+    try:
+        nudged.parent.mkdir(parents=True, exist_ok=True)
+        nudged.touch()
+    except OSError:
+        pass
+    log(f"NUDGE session={session_id} signals={'; '.join(found)}")
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "Stop",
+        "additionalContext": (
+            f"Tín hiệu học ở lượt này: {'; '.join(found)}. Nếu có bài học tái dùng "
+            "được thì chạy skill `learn`; không có gì đáng lưu thì bỏ qua."),
+    }}, ensure_ascii=False))
     return 0
 
 
@@ -137,22 +209,21 @@ def main() -> int:
         return 0
     try:
         payload = json.loads(sys.stdin.read())
-    except (json.JSONDecodeError, ValueError):
-        log("FAIL-OPEN: stdin không phải JSON")
+    except ValueError:
         return 0
     if not isinstance(payload, dict):
         return 0
-
-    event = payload.get("hook_event_name") or payload.get("hookEventName") or ""
-    session_id = str(payload.get("session_id") or payload.get("sessionId") or "")
+    session_id = str(payload.get("session_id") or "")
     if not session_id:
-        log("FAIL-OPEN: không có session_id")
         return 0
-
-    if event == "PostToolUse":
-        return handle_post_tool_use(payload, session_id)
-    if event == "Stop":
-        return handle_stop(payload, session_id)
+    event = payload.get("hook_event_name") or ""
+    try:
+        if event == "PostToolUse":
+            return handle_post_tool_use(payload, session_id)
+        if event == "Stop":
+            return handle_stop(payload, session_id)
+    except Exception as e:  # FAIL-OPEN: hook không bao giờ được làm hỏng lượt chính
+        log(f"FAIL-OPEN {type(e).__name__}: {e}")
     return 0
 
 

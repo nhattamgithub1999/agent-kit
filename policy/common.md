@@ -25,7 +25,7 @@ Gặp viết tắt / thuật ngữ nghiệp vụ chưa resolve được (vd `NDV
 - Task giao builder PHẢI có DoD là outcome kiểm chứng được. Không có → DỪNG, hỏi.
 - ATTEMPT CAP = 3 mỗi bước verify. Chạm trần → dừng, báo trạng thái thật.
 - Cascading failure (sửa A phá B): chạm cap thì dừng, không lặp.
-- Lệnh build/typecheck/lint/test: khai báo ở `<project>/.claude/CLAUDE.md` theo `~/.claude/VERIFICATION.template.md`. Chưa khai báo → HỎI, không đoán lệnh.
+- Lệnh build/typecheck/lint/test: khai báo ở `<project>/.claude/CLAUDE.md` theo `~/.claude/VERIFICATION.template.md`. Chưa khai báo → suy từ manifest theo skill `verify-loop` (chỉ script/target có thật); không xác định được lệnh an toàn → ghi CHƯA VERIFY, không đoán lệnh.
 
 ## Escalation — subagent KHÔNG tự spawn subagent
 Không agent nào có tool `Agent`. Cần năng lực cao hơn → DỪNG, trả về parent kèm

@@ -10,10 +10,10 @@ VẤN ĐỀ NÓ GIẢI:
   abstraction khi chưa chắc cần" (decision ladder) và tránh đúng cái gap mà
   hermes-agent đang thiếu (không có review trước khi áp dụng).
 
-TIÊU CHÍ "TASK PHỨC TẠP" — tái dùng ngưỡng ĐÃ CÓ trong builder.md (không bịa
-ngưỡng mới):
+TIÊU CHÍ "TASK PHỨC TẠP" — giữ ngưỡng lấy từ builder.md bản 1.0.4 (không bịa
+ngưỡng mới; từ 1.0.5 builder.md không còn ngưỡng này, hook giữ nguyên hành vi):
   - report của builder có heading "### Files changed" với >= 3 dòng "- `...`"
-    (đúng ngưỡng "Thay đổi chạm >= 3 file" ở builder.md, mục Cổng escalation).
+    (ngưỡng "Thay đổi chạm >= 3 file" ở mục Cổng escalation của builder.md 1.0.4).
   - VÀ report có "VERDICT: READY" (output contract của skill verify-loop).
 
 CHỈNH:

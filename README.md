@@ -10,7 +10,7 @@ buộc agent làm việc theo ba nguyên tắc:
 - **Review lại.** Việc làm xong phải đi qua vòng verify (build, typecheck, lint,
   test) và qua cổng phản biện.
 
-Phiên bản: **v1.0.4** (ghim `architect`, `critic`, `orchestrator` vào Opus 5.5 — `claude-opus-5-5`). Profile mặc định: DOCTRINE — plugin tiêm luật và ghi
+Phiên bản: **v1.0.5** (đồng bộ bản agent gọn từ cấu hình global, ghim `builder`/`verifier` vào `claude-sonnet-5-5`, thêm skill `learn` và `memory-nudge` v2). Profile mặc định: DOCTRINE — plugin tiêm luật và ghi
 log, **không hook nào chặn bằng exit code**. Ba hook chặn vẫn đi kèm repo, bật
 bằng tay, xem mục "Bật lại ba gate".
 
@@ -106,9 +106,10 @@ khoá nào; sơ đồ này là sơ đồ thật, không phải sơ đồ mong mu
 
 | Thành phần | Nội dung |
 |---|---|
-| `agents/` | Năm subagent: `Explore` (haiku), `architect` và `critic` (Opus 5.5), `builder` và `verifier` (sonnet) |
+| `agents/` | Năm subagent: `Explore` (haiku), `architect` và `critic` (Opus 5.5), `builder` và `verifier` (Sonnet 5.5) |
 | `hooks/` | Tám hook Python. Năm cái chạy mặc định (không chặn), ba cái là gate tuỳ chọn chưa đăng ký trong `hooks.json`. Xem bảng ở mục dưới |
-| `skills/verify-loop/` | Skill chạy vòng verify: build, typecheck, lint, test |
+| `skills/verify-loop/` | Skill chạy vòng verify: build, typecheck, lint, test. Lấy lệnh từ CLAUDE.md của project, không có thì suy từ manifest |
+| `skills/learn/` | Skill tự học có kiểm soát: lưu bài học đã kiểm chứng vào `~/.claude/learnings/` hoặc auto memory của project; `/learn review` để dọn kho. Xem mục "Kho bài học" |
 | `policy/common.md` | Luật áp cho mọi agent. Vào cả phiên chính lẫn subagent |
 | `policy/supervisor.md` | Luật điều phối. Chỉ vào phiên chính |
 | `policy/worker.md` | Luật thực thi. Chỉ vào subagent, không chứa bảng Routing |
@@ -142,14 +143,15 @@ cổng chặn; nó đặt luật vào đúng chỗ và để lại dấu vết k
 | `session-policy.py` | Mở phiên, và mỗi khi một subagent khởi động | Đưa policy vào context — plugin không đọc được `CLAUDE.md` nên đây là đường duy nhất. Phiên chính nhận luật điều phối, subagent nhận luật thực thi | Không |
 | `prompt-intake.py` | Người dùng gửi prompt | Nhắc quy ước vì policy đã trôi xa trong context. Chỉ *nhắc*, không phán lớp | Không |
 | `gloss-gate.py` | `Stop`, `SubagentStop` | Ghi log token viết tắt bị mở rộng nghĩa mà chữ cái đầu không khớp. Đăng ký sẵn ở chế độ `GLOSS_GATE=warn` | Không, chỉ ghi `~/.claude/gloss-gate.log` |
-| `memory-nudge.py` | Sau `Write`/`Edit`, và `Stop` | Gợi ý lưu memory khi lượt có tín hiệu quyết định/điều chỉnh mà chưa thấy ghi vào `memory/*.md` | Không |
+| `memory-nudge.py` | Sau `Write`/`Edit`, và `Stop` | Gợi ý chạy skill `learn` khi lượt vừa xong có tín hiệu học (user sửa hướng, lệnh verify fail → pass, subagent báo `### Bài học`) mà chưa ghi `memory/` hay `learnings/`. Ghi vào `learnings/` thì chạy `check.py`, có ERROR thì báo model | Không |
 | `skill-nudge.py` | `builder` kết thúc | Gợi ý cân nhắc đúc kết `SKILL.md` khi task chạm ≥3 file và đã `VERDICT: READY`. Không tự ghi vào `skills/` | Không |
 
 Cả năm đều **fail-open**: không đọc được dữ liệu đầu vào thì trả `exit 0`.
 
-Hai ngưỡng của `skill-nudge` không phải số mới đặt ra — chúng lấy đúng ngưỡng đã
-có: "≥3 file" là ngưỡng escalation trong `agents/builder.md`, `VERDICT: READY` là
-output contract của skill `verify-loop`.
+Hai ngưỡng của `skill-nudge` không phải số mới đặt ra: "≥3 file" là ngưỡng
+escalation của `agents/builder.md` bản 1.0.4 (từ 1.0.5 builder dừng theo phạm vi
+file được giao thay vì đếm file; hook giữ ngưỡng cũ), `VERDICT: READY` là output
+contract của skill `verify-loop`.
 
 ### Bật lại ba gate
 
@@ -224,7 +226,9 @@ cat VERIFICATION.template.md >> <project>/.claude/CLAUDE.md
 ```
 
 Sau đó điền lệnh build, typecheck, lint và test **thật** của project đó. Bỏ bước
-này thì agent phải tự suy đoán lệnh, và như vậy là mất luôn nguyên tắc không bịa.
+này thì `verify-loop` phải suy lệnh từ manifest (`package.json`, `*.csproj`,
+`pyproject.toml`…): chỉ dùng script có thật và đọc script trước khi chạy, nhưng
+vẫn kém chắc hơn lệnh do bạn khai.
 
 ## Glossary — nên làm ngay
 
@@ -243,6 +247,24 @@ kể cả khi chữ cái đầu khớp. Việc này trước đây do hook làm 
 Chỉ thêm một dòng khi bạn **đã xác nhận** nghĩa của nó. Một dòng sai ở đây sẽ hợp
 thức hoá đúng loại lỗi mà file này sinh ra để chặn.
 
+## Kho bài học — bật skill `learn` (tuỳ chọn)
+
+Skill `learn` ghi bài học dùng chung mọi project vào `~/.claude/learnings/`. Plugin
+không tạo kho này và không sửa `~/.claude/CLAUDE.md` của bạn, nên cần làm một lần:
+
+```bash
+L=~/.claude/learnings
+mkdir -p $L/personal $L/candidates $L/deprecated
+cp skills/learn/learnings-README.md $L/README.md
+printf '# Bài học cá nhân — mục lục\n' > $L/INDEX.md
+: > $L/CHANGELOG.md
+echo '@learnings/INDEX.md' >> ~/.claude/CLAUDE.md   # nạp mục lục vào mọi phiên
+```
+
+Chưa tạo kho thì bài học vẫn ghi được vào auto memory của project; `check.py` sẽ
+báo thiếu `INDEX.md`/`CHANGELOG.md` cho tới khi bạn chạy đoạn trên. Kho được nạp
+như chỉ dẫn thường trực, nên chỉ mục `verified` mà bạn đã duyệt mới vào `INDEX.md`.
+
 ## Điều chỉnh bằng biến môi trường
 
 Plugin không có cách khai báo biến môi trường
@@ -260,7 +282,9 @@ chạy `claude`.
 | `NOFAKEPASS_STRICT` | — | Đặt `1` để chặn cả khi không nhận diện được agent nào đang chạy |
 | `GLOSS_GATE` | `warn` (đặt sẵn trong `hooks.json`) | `block` là chặn thật, `off` là tắt hẳn. Xem "Những giới hạn đã biết" trước khi đặt `block` |
 | `GLOSS_MIN_LEN` | 3 | Độ dài tối thiểu của viết tắt mới bị soi |
-| `MEMORY_NUDGE` | — | Đặt `off` để tắt gợi ý lưu memory |
+| `MEMORY_NUDGE` | — | Đặt `off` để tắt gợi ý chạy skill `learn` |
+| `MEMORY_NUDGE_STATE`, `MEMORY_NUDGE_LOG` | thư mục tạm, `~/.claude/memory-nudge.log` | Đổi chỗ `memory-nudge` ghi marker và log |
+| `LEARN_CHECK` | `skills/learn/scripts/check.py` cạnh `hooks/` | Đổi `check.py` mà `memory-nudge` chạy sau khi ghi vào `learnings/` |
 | `SKILL_NUDGE` | — | Đặt `off` để tắt gợi ý đúc kết skill |
 | `SKILLNUDGE_AGENTS` | `builder` | Agent nào được soi để gợi ý đúc kết skill |
 | `FLOW_GATE` | — | Đặt `off` để tắt flow gate, nếu bạn đã tự bật nó |
@@ -409,6 +433,7 @@ không đo được agent có thật sự ngừng bịa hay không.
 ```bash
 claude plugin validate . --strict   # manifest và component của plugin
 python3 tests/test_hooks.py         # test hộp đen cho hooks/*.py, chạy hook thật
+python3 skills/learn/tests/test_harness.py   # check.py, learnctl.py và memory-nudge.py
 ```
 
 Bộ kiểm ngữ nghĩa 145 check và đối chứng âm 30 defect là công cụ nội bộ, không

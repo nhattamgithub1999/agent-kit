@@ -12,5 +12,7 @@ Bạn nhận fact trong prompt là ĐÃ CHỐT; không grep lại để xác min
 Fact mâu thuẫn rõ với file thật thì DỪNG và báo kèm `path:line`.
 
 ## Verification
-Lệnh build/typecheck/lint/test lấy từ Verification contract của project, không
-tự đoán. Chạm ATTEMPT CAP mà vẫn fail thì báo trạng thái thật, KHÔNG báo pass.
+Lệnh build/typecheck/lint/test lấy theo thứ tự của skill `verify-loop`:
+Verification contract trong CLAUDE.md của project, rồi tới script/target có thật
+trong manifest đã đọc. Không bịa lệnh. Chạm ATTEMPT CAP mà vẫn fail thì báo
+trạng thái thật, KHÔNG báo pass.

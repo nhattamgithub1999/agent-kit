@@ -66,7 +66,7 @@ ngữ cảnh hoặc ghi log:
 | `session-policy` | `SessionStart`, `SubagentStart` | Tiêm chính file policy này vào context. Không có nó thì phiên chính và subagent không thấy luật |
 | `prompt-intake` | `UserPromptSubmit` | Nhắc lại quy ước mỗi lượt. Chỉ nhắc, không phán prompt thuộc lớp nào |
 | `gloss-gate` | `Stop`, `SubagentStop` | Ghi log token viết tắt nghi bịa nghĩa. Mặc định `warn` = chỉ log, KHÔNG chặn |
-| `memory-nudge` | `PostToolUse(Write`/`Edit)`, `Stop` | Gợi ý lưu memory khi lượt có tín hiệu quyết định. Chỉ gợi ý |
+| `memory-nudge` | `PostToolUse(Write`/`Edit)`, `Stop` | Gợi ý chạy skill `learn` khi lượt có tín hiệu học (user sửa hướng, verify fail → pass, subagent báo bài học). Chỉ gợi ý |
 | `skill-nudge` | `SubagentStop(builder)` | Gợi ý đúc kết skill sau task chạm ≥3 file và đã READY. Chỉ gợi ý |
 
 Ba hook chặn (`flow-gate`, `plan-gate`, `no-fake-pass`) VẪN nằm trong `hooks/`
